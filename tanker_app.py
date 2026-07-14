@@ -6089,7 +6089,8 @@ def main():
             # Positive value in col 21 → that vessel IS the MTO receiver
             # Negative value in col 21 → that vessel is DISCHARGING into the MTO receiver
             _ALL_DAUGHTER_NAMES = ["Sherlock","Laphroaig","Watson","Bedford","Balham",
-                                   "Amyla","Bagshot","Rahama","Rathbone","SantaMonica","Woodstock"]
+                                   "Amyla","Bagshot","Rahama","Rathbone","SantaMonica","Woodstock",
+                                   "FatimaZarah"]
             _MTO_SCAN_ROWS = list(range(18, 29))   # rows 18-28 inclusive (Woodstock now at row 28)
 
             # Find the MTO receiver: positive value in col 21
@@ -6118,6 +6119,7 @@ def main():
                     "Bedford":  66_000, "Balham":    66_000, "Amyla":  67_000,
                     "Bagshot":  45_000, "Rahama":    35_000, "Rathbone": 46_000,
                     "SantaMonica": 28_000, "Woodstock": 42_000,
+                    "FatimaZarah": 50_000,
                 }
                 # A vessel is only an MTO receiver when she carries SUBSTANTIALLY
                 # more than her rated capacity — not a trivial overload from storage.

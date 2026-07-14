@@ -357,7 +357,8 @@ VESSEL_DISCHARGE_RATE_BPH: dict = {
     "Bagshot":     3_583,   # 43,000 bbl class — 12 h full-load discharge
     "Rathbone":    3_667,   # 44,000 bbl class — 12 h full-load discharge
     "Rahama":      4_000,   # 30,000 bbl class — operator-specified 4,000 bph
-    "FatimaZarah": 4_167,   # 50,000 bbl class — 12 h full-load discharge
+    "FatimaZarah": 9_700,   # MR hull — sized to her 310,000 bbl transient ceiling
+                            # (~32 h at full MTO cap; ~5.2 h for a nominal 50k parcel)
 }
 # ── SECTION H: POINT A LOAD CAP ──────────────────────────────────────────────
 POINT_A_LOAD_CAP_BBL = 63_000   # Max load at Point A for POINT_A_LOAD_CAP_VESSELS
@@ -409,6 +410,7 @@ MTO_TRANSIENT_CAPACITY_BBL: dict = {
     "Rathbone":    78_000,
     "SantaMonica": 35_000,
     "Woodstock":   95_000,
+    "FatimaZarah": 310_000,   # MR hull — largest transient receiver in the fleet
 }
 
 # ── MTO MULTI-PARCEL ACCUMULATION ────────────────────────────────────────────
