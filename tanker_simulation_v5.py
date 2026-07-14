@@ -3,12 +3,12 @@
 OIL TANKER DAUGHTER VESSEL OPERATION SIMULATION  (v5)
 =============================================================
 Simulates the continuous loading/offloading cycle between:
-    - Storage Vessel (Chapel / Point A)  - capacity 800,000 bbls
+    - Storage Vessel (SanBarth / Point A)  - capacity 800,000 bbls
     - Daughter Vessels: Sherlock, Laphroaig, Rathbone, Bedford, Balham, Woodstock, Bagshot
     - Mother Vessel (Bryanston / Point B) - capacity 550,000 bbls
 
 v5 changes — Multi-point independent storage loading at Point A/C/D/E:
-    Point A has two active storage load points (Chapel and JasmineS).
+    Point A has two active storage load points (SanBarth and JasmineS).
     Point C has one active storage load point (Westmore).
     Point D has one active storage load point (Duke).
     Point E has one active storage load point (Starturn).
@@ -28,7 +28,7 @@ import random
 # Version identifier — read by tanker_app.py to auto-clear Streamlit cache
 # on deployment. Bump this string whenever the sim logic changes in a way
 # that would invalidate cached run_sim() results.
-SIM_VERSION = "5.17"
+SIM_VERSION = "5.50-export-loading-lockout-and-status-fixes"
 
 # -----------------------------------------------------------------
 # VOYAGE CODE SYSTEM
@@ -52,7 +52,8 @@ _VESSEL_CODE_PREFIX = {
     "Woodstock":  "WDK",
     "Bagshot":    "BGT",
     "Watson":     "WTS",
-    "Berners":    "BNR",
+    "Amyla":    "AMY",
+    "FatimaZarah":"FTZ",
     # ZeeZee (third-party)
     "ZeeZee":     "ZZE",
 }
@@ -74,7 +75,7 @@ def make_voyage_code(vessel_name: str, voyage_num: int) -> str:
 # PRODUCTION API GRAVITY (degrees API per source)
 # -----------------------------------------------------------------
 STORAGE_API = {
-    "Chapel"  : 29.00,
+    "SanBarth"  : 29.00,
     "JasmineS": 43.36,
     "Westmore" : 31.10,
     "Duke"    : 41.20,
@@ -210,12 +211,12 @@ def load_tide_table(csv_path):
 # ║    2. Add her cargo capacity to VESSEL_CAPACITIES (bbl)                  ║
 # ║    3. Add her name to the relevant *_PERMITTED_VESSELS sets below        ║
 # ║    4. If Point A only: add to POINT_A_ONLY_VESSELS                       ║
-# ║    5. If Chapel slow-loader: add to CHAPEL_SLOW_LOADERS                  ║
+# ║    5. If SanBarth slow-loader: add to SANBARTH_SLOW_LOADERS                  ║
 # ║    6. If Point A load cap applies: add to POINT_A_LOAD_CAP_VESSELS       ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 # =============================================================================
 
-SIMULATION_DAYS = 14   # How many days to simulate
+SIMULATION_DAYS = 30   # How many days to simulate
 
 # ── SECTION A: DAUGHTER VESSELS ──────────────────────────────────────────────
 #  Dispatch order = top to bottom. Add a new vessel by inserting a new row.
@@ -234,7 +235,9 @@ _DAUGHTER_ROWS = [
     ( "Woodstock",   42_000 ),   # Point A/E — loads 6th
     ( "Bagshot",     43_000 ),   # Point A/C/D — loads 7th
     ( "Watson",      85_000 ),   # Point A/C — loads 8th
-    ( "Berners",     63_000 ),   # Point A only — loads 9th
+    ( "Amyla",     63_000 ),   # Point A/C/F — loads 9th
+    ( "Rahama",    30_000 ),   # Point A (SanBarth/JasmineS) + Westmore (C) + Duke (D) — loads 10th
+    ( "FatimaZarah", 50_000 ),   # Point A (SanBarth/JasmineS) — loads 11th
 ]
 # ─────────────────────────────────────────────────────────────────────────────
 # Derived — do not edit these two lines
@@ -247,16 +250,23 @@ DAUGHTER_CARGO_BBL = 85_000   # Default cargo for vessels not in VESSEL_CAPACITI
 #  Add / remove vessel names from each set to control where they can load.
 #  A vessel absent from a set is BLOCKED at that storage.
 # ─────────────────────────────────────────────────────────────────────────────
-WESTMORE_PERMITTED_VESSELS  = {"Sherlock", "Bagshot", "Rathbone", "Watson", "Laphroaig"}
-DUKE_PERMITTED_VESSELS      = {"Woodstock", "Bagshot", "Rathbone", "SantaMonica"}
-STARTURN_PERMITTED_VESSELS  = {"Woodstock", "Rathbone", "SantaMonica"}
-POINT_A_ONLY_VESSELS        = {"Berners"}   # never dispatched away from Point A
-CHAPEL_SLOW_LOADERS         = {"Woodstock", "Bagshot", "Rathbone", "SantaMonica"}  # reduced Chapel rate
+WESTMORE_PERMITTED_VESSELS  = {"Sherlock", "Bagshot", "Rathbone", "Watson", "Laphroaig", "Amyla", "Rahama"}
+DUKE_PERMITTED_VESSELS      = {"Woodstock", "Bagshot", "Rathbone", "SantaMonica", "Rahama"}
+STARTURN_PERMITTED_VESSELS  = {"Woodstock", "Rathbone", "SantaMonica", "Bagshot"}
+POINT_A_ONLY_VESSELS        = set()   # Amyla now permitted at Westmore (C) and Ibom (F)
+SANBARTH_SLOW_LOADERS         = {"Woodstock", "Bagshot", "Rathbone", "SantaMonica", "Rahama"}  # reduced SanBarth rate
+
+# Vessels that may never be nominated as the MTO transient (receiver).
+# They may still act as MTO dischargers (pumping cargo into another vessel).
+MTO_NEVER_RECEIVER          = {"Rahama", "SantaMonica"}
+# Vessels that must only discharge directly to a mother vessel.
+# They are excluded from MTO discharger pairings (no ship-to-ship transfer).
+PRIMARY_MOTHERS_ONLY_VESSELS = {"SantaMonica"}
 POINT_A_LOAD_CAP_VESSELS    = {"Bedford", "Balham"}      # capped at POINT_A_LOAD_CAP_BBL at Point A
 
 # Special per-vessel storage allowlists (overrides all set-based checks above)
-# SantaMonica: Chapel (A), Duke (D), Starturn (E) only
-STORAGE_PRIMARY_NAME   = "Chapel"
+# SantaMonica: Starturn (E) and PGM (G) only
+STORAGE_PRIMARY_NAME   = "SanBarth"
 STORAGE_SECONDARY_NAME = "JasmineS"
 STORAGE_TERTIARY_NAME  = "Westmore"
 STORAGE_QUATERNARY_NAME = "Duke"
@@ -264,14 +274,12 @@ STORAGE_QUINARY_NAME   = "Starturn"
 STORAGE_SENARY_NAME    = "PGM"          # Point G — SantaMonica only
 PGM_PERMITTED_VESSELS  = {"SantaMonica"}  # only vessel allowed at Point G
 SANTAMONICA_PERMITTED_STORAGES = (
-    STORAGE_PRIMARY_NAME,       # Chapel   — Point A
-    STORAGE_QUATERNARY_NAME,    # Duke     — Point D
     STORAGE_QUINARY_NAME,       # Starturn — Point E
     STORAGE_SENARY_NAME,        # PGM      — Point G
 )
-# Watson: Chapel (A), JasmineS (A), Westmore (C)
+# Watson: SanBarth (A), JasmineS (A), Westmore (C)
 WATSON_PERMITTED_STORAGES = (
-    STORAGE_PRIMARY_NAME,       # Chapel   — Point A
+    STORAGE_PRIMARY_NAME,       # SanBarth   — Point A
     STORAGE_SECONDARY_NAME,     # JasmineS — Point A
     STORAGE_TERTIARY_NAME,      # Westmore — Point C
 )
@@ -280,58 +288,77 @@ LAPHROAIG_PERMITTED_STORAGES = (
     STORAGE_SECONDARY_NAME,     # JasmineS — Point A
     STORAGE_TERTIARY_NAME,      # Westmore — Point C
 )
+# Amyla: SanBarth (A), JasmineS (A), Westmore (C), Ibom (F offshore buoy)
+AMYLA_PERMITTED_STORAGES = (
+    STORAGE_PRIMARY_NAME,       # SanBarth   — Point A
+    STORAGE_SECONDARY_NAME,     # JasmineS — Point A
+    STORAGE_TERTIARY_NAME,      # Westmore — Point C
+    "Ibom",                     # Point F  — offshore buoy
+)
 
 # ── SECTION C: PRODUCTION RATES (bbl/hr) ─────────────────────────────────────
 #  Storage          Rate (bph)   Notes
 # ─────────────────────────────────────────────────────────────────────────────
-PRODUCTION_RATE_BPH          = 1_600   # Chapel & JasmineS (Point A)
+PRODUCTION_RATE_BPH          = 1_600   # SanBarth & JasmineS (Point A)
 WESTMORE_PRODUCTION_RATE_BPH =   960   # Westmore (Point C)
 DUKE_PRODUCTION_RATE_BPH     =   250   # Duke (Point D)
-STARTURN_PRODUCTION_RATE_BPH =    83   # Starturn (Point E)
-PGM_PRODUCTION_RATE_BPH      =    40   # PGM (Point G) — SantaMonica only
+STARTURN_PRODUCTION_RATE_BPH =    125   # Starturn (Point E)
+PGM_PRODUCTION_RATE_BPH      =     80   # PGM (Point G) — 80 bbl/hour; SantaMonica only
 POINT_F_LOAD_RATE_BPH        =   165   # Ibom offshore buoy (Point F) — also production rate
 
 # ── SECTION D: STORAGE CAPACITIES (bbl) ──────────────────────────────────────
 #  Storage          Capacity (bbl)   Notes
 # ─────────────────────────────────────────────────────────────────────────────
-STORAGE_CAPACITY_BBL          = 270_000   # Chapel & JasmineS (default)
+STORAGE_CAPACITY_BBL          = 270_000   # generic default for any unlisted tank
+SANBARTH_STORAGE_CAPACITY_BBL = 400_000   # SanBarth — Point A floating storage
 DUKE_STORAGE_CAPACITY_BBL     =  90_000   # Duke
 STARTURN_STORAGE_CAPACITY_BBL =  70_000   # Starturn
-PGM_STORAGE_CAPACITY_BBL      =  40_000   # PGM (Point G) — SantaMonica only
-# Westmore uses STORAGE_CAPACITY_BBL (270,000) — override here if needed:
-# WESTMORE_STORAGE_CAPACITY_BBL = 270_000
+PGM_STORAGE_CAPACITY_BBL      =  28_000   # PGM (Point G) — SantaMonica only
+# Westmore max stock is set to 220,000 in STORAGE_CAPACITY_BY_NAME (see below).
+# WESTMORE_STORAGE_CAPACITY_BBL = 220_000
 
 # ── SECTION E: MOTHER VESSEL CAPACITIES (bbl) ────────────────────────────────
 #  Mother           Capacity (bbl)   Notes
 # ─────────────────────────────────────────────────────────────────────────────
 MOTHER_CAPACITY_BBL  = 550_000   # Bryanston (default for primary mothers)
 #                                  # Alkebulan and GreenEagle capacities set below
-SANJULIAN_CAPACITY_BBL = 450_000  # SanJulian (intermediate floating storage)
 
 # ── SECTION F: LOADING RATES (bbl/hr at each storage) ────────────────────────
 #  Storage          Rate (bph)   Notes
 # ─────────────────────────────────────────────────────────────────────────────
-CHAPEL_LOAD_RATE_BPH      = 6_538   # Standard Chapel rate (85,000 bbl / 13 h)
-CHAPEL_LOAD_RATE_SLOW_BPH = 5_000   # Reduced rate for CHAPEL_SLOW_LOADERS
+SANBARTH_LOAD_RATE_BPH      = 6_538   # Standard SanBarth rate (85,000 bbl / 13 h)
+SANBARTH_LOAD_RATE_SLOW_BPH = 5_000   # Reduced rate for SANBARTH_SLOW_LOADERS
 JASMINES_LOAD_RATE_BPH    = 4_000   # JasmineS (85,000 bbl / 21.25 h)
 WESTMORE_LOAD_RATE_BPH    = 2_000   # Westmore
 DUKE_LOAD_RATE_BPH        = 3_500   # Duke
 STARTURN_LOAD_RATE_BPH    = 2_500   # Starturn
-PGM_LOAD_RATE_BPH         = 440   # PGM (Point G) — SantaMonica loads at 60% reduction (440 bph)
+PGM_LOAD_RATE_BPH         = 270   # PGM (Point G) — pump rate; SantaMonica loads 9,500 bbl
 
 # ── SECTION G: DISCHARGE / EXPORT RATES (bbl/hr) ─────────────────────────────
 #  Operation         Rate (bph)   Notes
 # ─────────────────────────────────────────────────────────────────────────────
 EXPORT_RATE_BPH            = 20_000   # Mother vessel export pump rate
-SANJULIAN_TRANSLOAD_RATE_BPH = 10_000 # SanJulian → primary mother transfer rate
 
 # Per-vessel discharge rates (bbl/hr) at Point B.
 # Vessels absent from this dict use DISCHARGE_HOURS (fixed 12-hour default).
 # When present, discharge duration = cargo_bbl / rate (dynamic).
 VESSEL_DISCHARGE_RATE_BPH: dict = {
     "SantaMonica": 2_500,   # 2,500 bph → 28,000 bbl discharges in ~11.2 h
+    "ZeeZee":      7_000,   # 7,000 bph — operator-specified discharge rate
+    # Standard 85 k-class rate: 85,000 bbl / 12 h ≈ 7,083 bph.
+    # Amyla (63 k) runs the same pump rate as Bedford — smaller cargo means shorter discharge.
+    "Bedford":     7_083,   # 85,000 bbl class — 12 h full-load discharge
+    "Balham":      7_083,   # 85,000 bbl class — 12 h full-load discharge
+    "Sherlock":    7_083,   # 85,000 bbl class — 12 h full-load discharge
+    "Laphroaig":   7_083,   # 85,000 bbl class — 12 h full-load discharge
+    "Watson":      7_083,   # 85,000 bbl class — 12 h full-load discharge
+    "Amyla":       7_083,   # same pump rate as Bedford (63 k cargo → ~8.9 h discharge)
+    "Woodstock":   3_500,   # 42,000 bbl class — 12 h full-load discharge
+    "Bagshot":     3_583,   # 43,000 bbl class — 12 h full-load discharge
+    "Rathbone":    3_667,   # 44,000 bbl class — 12 h full-load discharge
+    "Rahama":      4_000,   # 30,000 bbl class — operator-specified 4,000 bph
+    "FatimaZarah": 4_167,   # 50,000 bbl class — 12 h full-load discharge
 }
-
 # ── SECTION H: POINT A LOAD CAP ──────────────────────────────────────────────
 POINT_A_LOAD_CAP_BBL = 63_000   # Max load at Point A for POINT_A_LOAD_CAP_VESSELS
 
@@ -344,18 +371,103 @@ POINT_A_LOAD_CAP_BBL = 63_000   # Max load at Point A for POINT_A_LOAD_CAP_VESSE
 POINT_B_DISTRIBUTION_TEST_MODE = False
 POINT_B_DISTRIBUTION_TEST_DAYS = 3
 
+# ── MULTIPLE TRANSIENT OPERATION (MTO) ───────────────────────────────────────
+# When True: if >=2 shuttle vessels are stuck at Point B waiting (WAITING_BERTH_B
+# or WAITING_MOTHER_CAPACITY) and cannot berth today (hard blockage or all berths
+# occupied past daylight end), a mid-day (12:00) nomination fires once per day.
+#
+# The vessel with the most headroom in the MTO capacity table is nominated as
+# transient storage. The smallest waiting shuttle transfers its full cargo into
+# the transient (clamped to available headroom so the cap is never exceeded).
+# The discharger is then freed to return and reload immediately.
+#
+# The transient vessel carries the accumulated cargo and discharges to a primary
+# mother opportunistically — it checks for an available berth every hourly tick
+# and takes the first window that opens, regardless of what day it is.
+# It does NOT wait to reach its capacity limit before offloading.
+#
+# MTO_MAX_PARCELS_BEFORE_OFFLOAD controls only how many additional shuttle
+# top-ups the transient may accept on subsequent congested days WHILE it is
+# still waiting for a berth.  The capacity ceiling prevents overfilling.
+#
+# Set at runtime by run_sim() from the app toggle; default True so MTO is
+# active from the first tick unless explicitly disabled by the operator.
+MULTIPLE_TRANSIENT_OPERATION = True
+
+# ── MTO TRANSIENT STORAGE CAPACITIES (bbl) ───────────────────────────────────
+# Maximum volume a vessel may hold when acting as temporary storage at BIA.
+# A discharger's transfer is clamped so the transient never exceeds this cap.
+# Vessels absent from this dict use their normal cargo_capacity as the cap.
+MTO_TRANSIENT_CAPACITY_BBL: dict = {
+    "Balham":     125_000,
+    "Bedford":    125_000,
+    "Amyla":    125_000,
+    "Bagshot":    125_000,
+    "Laphroaig":  230_000,
+    "Sherlock":   230_000,
+    "Watson":     230_000,
+    "Rathbone":    78_000,
+    "SantaMonica": 35_000,
+    "Woodstock":   95_000,
+}
+
+# ── MTO MULTI-PARCEL ACCUMULATION ────────────────────────────────────────────
+# Controls how many additional shuttle cargoes the transient vessel may accept
+# on subsequent congested days while it is still waiting for a mother berth.
+# This is NOT a "fill before offload" target — the transient discharges
+# opportunistically as soon as any mother berth opens, whatever its volume.
+# Setting this higher lets the transient absorb more stranded cargoes on
+# prolonged congested periods (e.g. mother away at export for 2+ days).
+# The optimizer sweeps this parameter when MTO is enabled.
+# How long an MTO transient that has reached its parcel limit may sit unable to
+# claim ANY primary berth before it is allowed to *queue* for the soonest-freeing
+# occupied primary (waiting its turn, never displacing an active incumbent).
+# Below this threshold the transient just rechecks normally, so ordinary berth
+# waits are not perturbed; only a genuinely stuck transient (whose only space-
+# having primary is continuously busy) escalates so its cargo is not stranded.
+MTO_OFFLOAD_STUCK_ESCALATION_HOURS: float = 24.0   # 1 day
+
+MTO_MAX_PARCELS_BEFORE_OFFLOAD: int = 1       # base value when primaries available
+MTO_MAX_PARCELS_ESCALATED:     int = 3       # raised when BOTH primaries are down
+
 # ── Internal: derived values (auto-computed from config table above) ──────────
 NUM_DAUGHTERS             = len(VESSEL_NAMES)
 MAX_DAUGHTER_CARGO        = max(VESSEL_CAPACITIES.values(), default=DAUGHTER_CARGO_BBL)
 MIN_INCOMING_TRANSFER_BBL = min(VESSEL_CAPACITIES.values(), default=DAUGHTER_CARGO_BBL)
 
 # ── Internal: initialisation defaults (overridden by app at runtime) ─────────
-STORAGE_INIT_BBL = 400_000
-MOTHER_INIT_BBL  = 0
+# Storage defaults: 80% of standard 270k SanBarth/JasmineS capacity.
+# Per-tank 80% values are applied in run_sim() using each tank's actual capacity.
+STORAGE_INIT_BBL = 216_000   # generic standalone default; the app applies
+                             # per-tank 80%-of-capacity values at run time.
+# Mother startup stock defaults — mirrors the app's UI defaults so that running
+# the simulation standalone produces the same initial conditions as the app.
+# run_sim() overwrites these after construction with the operator-supplied values,
+# so this dict only affects direct Simulation() instantiation (e.g. tests, scripts).
+MOTHER_INIT_BBL_BY_NAME = {
+    "Bryanston":  450_000,   # app default: ~82% of 550k capacity
+    "GreenEagle": 300_000,   # app default: ~40% of 750k capacity
+    "Alkebulan":  300_000,   # app default: ~40% of 750k capacity (clone of GreenEagle)
+}
+MOTHER_INIT_BBL  = 0   # legacy scalar; used as fallback for any unlisted mother
 
 # ── Internal: dead-stock and dispatch tuning ──────────────────────────────────
 DEAD_STOCK_FACTOR         = 1.75   # vessel waits until 175% of cargo is available
 DEAD_STOCK_MAX_WAIT_HOURS = 12.0   # abort dead-stock wait after this many hours
+
+# Per-storage dead-stock factor overrides.
+# High-production tanks (SanBarth/JasmineS) can sustain the 1.75 default.
+# Small, slow-filling tanks must dispatch sooner so vessels never wait
+# indefinitely at a nearly-full small tank.
+# PGM uses 1.0 — SantaMonica loads every cycle regardless of dead-stock.
+DEAD_STOCK_FACTOR_BY_STORAGE: dict = {
+    # "SanBarth"    : 1.75,   # default — omit to use DEAD_STOCK_FACTOR
+    # "JasmineS"  : 1.75,   # default — omit to use DEAD_STOCK_FACTOR
+    "Westmore"   : 1.50,
+    "Duke"       : 1.25,
+    "Starturn"   : 1.25,
+    "PGM"        : 1.00,
+}
 DUKE_STARTURN_DEAD_STOCK_BBL = 5_000
 DUKE_MIN_REMAINING_BBL    = 5_000
 STARTURN_MIN_REMAINING_BBL = 5_000
@@ -363,7 +475,7 @@ PGM_MIN_REMAINING_BBL      = 2_000   # PGM dead-stock reserve (small tank)
 
 # ── Internal: load-cap multipliers (JasmineS oversizes, Westmore undersizes) ─
 JASMINES_LOAD_CAP_MULTIPLIER  = 1.08
-WESTMORE_LOAD_CAP_MULTIPLIER  = 0.82
+WESTMORE_LOAD_CAP_OFFSET_BBL  = 1_000    # Point C: vessels load exactly 1,000 bbl below normal capacity
 
 # ── Internal: Point F (Ibom) tuning ──────────────────────────────────────────
 POINT_F_SWAP_HOURS          = 2
@@ -378,6 +490,210 @@ LOAD_HOURS             = 12
 DISCHARGE_HOURS        = 12
 CAST_OFF_HOURS         = 0.2
 BERTHING_DELAY_HOURS   = 0.5
+
+# =============================================================================
+# ── STOCHASTIC VARIABILITY & REALISM ENGINE ───────────────────────────────────
+#
+# Converts deterministic fixed-duration operations to realistic probabilistic
+# ones, reflecting the variability observed in real offshore logistics.
+#
+# ENABLE_VARIABILITY = False  → original deterministic behaviour (default).
+# ENABLE_VARIABILITY = True   → durations sampled from calibrated distributions;
+#                               weather disruptions and equipment delays applied.
+#
+# All distributions are parameterised as (nominal_hours, cv) where cv is the
+# coefficient of variation (std_dev / mean).  A triangular distribution is used
+# throughout because it is fully specified by three intuitive field parameters
+# (minimum, mode, maximum) and never produces negative durations.
+#
+# CALIBRATION GUIDE — replace the default cv values with values derived from
+# your historical port records once available:
+#   cv = 0.05  → low variability  (well-controlled operation, modern port)
+#   cv = 0.15  → medium           (typical offshore field operation)
+#   cv = 0.25  → high             (ageing equipment, adverse conditions)
+#   cv = 0.40  → severe           (congested or weather-exposed location)
+# =============================================================================
+
+ENABLE_VARIABILITY           = False   # master switch — set True to enable
+
+# ── Per-operation coefficient of variation (cv = σ/μ) ─────────────────────────
+VARIABILITY_CV_LOADING         = 0.15   # loading duration: pump-rate uncertainty
+VARIABILITY_CV_DISCHARGE       = 0.12   # discharge at BIA: hose/valve variability
+VARIABILITY_CV_TRANSIT         = 0.10   # passage time: current/weather/speed
+VARIABILITY_CV_BERTHING        = 0.20   # manoeuvring delay: pilot availability
+VARIABILITY_CV_HOSE_CONNECT    = 0.18   # hose connection: crew readiness
+VARIABILITY_CV_CAST_OFF        = 0.15   # cast-off: weather, line handling
+VARIABILITY_CV_EXPORT_DOC      = 0.20   # documentation: port office workload
+VARIABILITY_CV_FENDER_PREP     = 0.15   # fender preparation
+
+# ── Weather disruption model ───────────────────────────────────────────────────
+# Each half-hour timestep has a WEATHER_PROB_PER_HOUR * TIME_STEP_HOURS chance
+# of triggering a weather hold.  When triggered, operations are suspended for
+# a duration drawn from an exponential distribution (mean = WEATHER_HOLD_MEAN_H).
+# Only affects crossing/transit states; berthed operations are not interrupted.
+WEATHER_PROB_PER_HOUR        = 0.02    # 2 %/h base probability (offshore typical)
+WEATHER_HOLD_MEAN_H          = 3.0     # mean hold duration (hours)
+WEATHER_HOLD_MAX_H           = 12.0    # cap: no single hold exceeds this
+
+# ── Equipment breakdown / inspection delay model ──────────────────────────────
+# Applied at loading point: random chance of an additional delay before the
+# pump starts (equipment check, line flush, cargo measurement dispute).
+EQUIP_DELAY_PROB_PER_LOAD    = 0.08    # 8 % of loads experience a delay event
+EQUIP_DELAY_MEAN_H           = 1.5     # mean delay duration (hours)
+EQUIP_DELAY_MAX_H            = 6.0     # cap: inspection/repair ceiling
+
+# ── Human decision lag ────────────────────────────────────────────────────────
+# Represents the lag between a vessel becoming operationally ready and the
+# actual command being issued (shift handover, communications gap, paperwork).
+HUMAN_LAG_PROB               = 0.12    # 12 % of berthing events experience lag
+HUMAN_LAG_MEAN_H             = 0.5     # mean lag (hours)
+HUMAN_LAG_MAX_H              = 2.0     # cap
+
+# ── Congestion multiplier ─────────────────────────────────────────────────────
+# When multiple vessels are waiting at BIA (≥ CONGESTION_THRESHOLD vessels in
+# WAITING_BERTH_B), all berthing and hose-connection durations are multiplied
+# by CONGESTION_FACTOR to model the real-world slowdown from crowded anchorage,
+# increased marine traffic, and stretched port resources.
+CONGESTION_THRESHOLD         = 3       # vessels at BIA before congestion applies
+CONGESTION_FACTOR            = 1.20    # 20 % duration penalty under congestion
+
+# ── Production rate variability ───────────────────────────────────────────────
+# Field production is not perfectly constant. Each daily pre-ops reassessment
+# applies a small perturbation to the effective production rate.
+PRODUCTION_VARIABILITY_CV    = 0.05    # 5 % day-to-day production fluctuation
+
+# ── Random seed for reproducibility ──────────────────────────────────────────
+# Set to an integer for reproducible runs (useful for calibration).
+# Set to None for a fresh random sequence each run.
+VARIABILITY_RANDOM_SEED      = None
+
+def _variability_sample(nominal_h: float, cv: float) -> float:
+    """Return a sampled duration from a triangular distribution.
+
+    The triangular is parameterised so that:
+        mode = nominal_h
+        min  = nominal_h * max(0.01, 1.0 - 2*cv)  (floor at 1% of nominal)
+        max  = nominal_h * (1.0 + 2*cv)
+
+    This gives a plausible spread: for cv=0.15 a 2h nominal operation samples
+    roughly between 1.4 h and 2.6 h with mode 2 h.
+
+    Returns nominal_h unchanged when ENABLE_VARIABILITY is False.
+    """
+    if not ENABLE_VARIABILITY or nominal_h <= 0:
+        return nominal_h
+    lo  = nominal_h * max(0.01, 1.0 - 2.0 * cv)
+    hi  = nominal_h * (1.0 + 2.0 * cv)
+    return random.triangular(lo, hi, nominal_h)
+
+
+def _weather_hold_hours() -> float:
+    """Return a weather hold duration (0 if no event) at the current timestep.
+
+    Probability is scaled to TIME_STEP_HOURS so results are independent of
+    timestep size.  Returns 0 when ENABLE_VARIABILITY is False.
+    """
+    if not ENABLE_VARIABILITY:
+        return 0.0
+    if random.random() < WEATHER_PROB_PER_HOUR * TIME_STEP_HOURS:
+        hold = random.expovariate(1.0 / WEATHER_HOLD_MEAN_H)
+        return min(hold, WEATHER_HOLD_MAX_H)
+    return 0.0
+
+
+def _equipment_delay_hours() -> float:
+    """Return an equipment/inspection delay at load start (0 = no event)."""
+    if not ENABLE_VARIABILITY:
+        return 0.0
+    if random.random() < EQUIP_DELAY_PROB_PER_LOAD:
+        delay = random.expovariate(1.0 / EQUIP_DELAY_MEAN_H)
+        return min(delay, EQUIP_DELAY_MAX_H)
+    return 0.0
+
+
+def _human_lag_hours() -> float:
+    """Return a human decision lag at berthing (0 = no event)."""
+    if not ENABLE_VARIABILITY:
+        return 0.0
+    if random.random() < HUMAN_LAG_PROB:
+        lag = random.expovariate(1.0 / HUMAN_LAG_MEAN_H)
+        return min(lag, HUMAN_LAG_MAX_H)
+    return 0.0
+
+
+def _congestion_factor(n_waiting: int) -> float:
+    """Return the duration multiplier under port congestion."""
+    if not ENABLE_VARIABILITY or n_waiting < CONGESTION_THRESHOLD:
+        return 1.0
+    return CONGESTION_FACTOR
+
+
+# =============================================================================
+# ── CALIBRATION & VALIDATION TRACKING ────────────────────────────────────────
+#
+# SimulationStats collects planned-vs-actual durations for each operation
+# type.  At the end of a run, .calibration_report() returns a dict suitable
+# for display in the dashboard or export to CSV.
+# =============================================================================
+
+class SimulationStats:
+    """Accumulates planned vs actual operation durations for calibration."""
+
+    def __init__(self):
+        self._records: list = []   # (operation, planned_h, actual_h)
+
+    def record(self, operation: str, planned_h: float, actual_h: float) -> None:
+        self._records.append((operation, planned_h, actual_h))
+
+    def calibration_report(self) -> dict:
+        """Return per-operation mean bias and RMSE between planned and actual."""
+        from collections import defaultdict
+        import math
+        buckets = defaultdict(list)
+        for op, planned, actual in self._records:
+            buckets[op].append((planned, actual))
+        report = {}
+        for op, pairs in buckets.items():
+            n         = len(pairs)
+            bias      = sum(a - p for p, a in pairs) / n
+            rmse      = math.sqrt(sum((a - p)**2 for p, a in pairs) / n)
+            mean_plan = sum(p for p, _ in pairs) / n
+            mean_act  = sum(a for _, a in pairs) / n
+            report[op] = {
+                "n":         n,
+                "mean_planned_h": round(mean_plan, 3),
+                "mean_actual_h":  round(mean_act,  3),
+                "mean_bias_h":    round(bias,  3),
+                "rmse_h":         round(rmse,  3),
+                "pct_bias":       round(100 * bias / mean_plan, 1) if mean_plan else 0,
+            }
+        return report
+
+def _berth_free_at(pump_end_sim_hour: float) -> float:
+    """Return the sim-hour at which the mother berth is truly free after a discharge.
+
+    A vessel is physically alongside the mother until cast-off completes.
+    Cast-off is constrained to the window [CAST_OFF_START, CAST_OFF_END) wall-clock.
+    When pumping finishes after CAST_OFF_END (e.g. 23:56) the vessel cannot cast
+    off until the next morning at CAST_OFF_START (06:00), so the berth remains
+    occupied overnight — locking out any other vessel until then.
+
+    Using a flat ``+ CAST_OFF_HOURS`` incorrectly frees the berth at pump_end + 0.2h
+    regardless of whether the nighttime restriction delays cast-off by 6-12 hours.
+    """
+    wall_at_pump_end = (pump_end_sim_hour + SIM_HOUR_OFFSET) % 24
+    if CAST_OFF_START <= wall_at_pump_end < CAST_OFF_END:
+        # Pump ends inside cast-off window — cast off immediately
+        cast_off_t = pump_end_sim_hour
+    else:
+        # Pump ends outside cast-off window — roll forward to next window open
+        days_elapsed = int(pump_end_sim_hour // 24)
+        sim_co_today = days_elapsed * 24 + (CAST_OFF_START - SIM_HOUR_OFFSET)
+        if pump_end_sim_hour <= sim_co_today:
+            cast_off_t = sim_co_today
+        else:
+            cast_off_t = sim_co_today + 24  # next calendar day
+    return cast_off_t + CAST_OFF_HOURS
 POST_BERTHING_START_GAP_HOURS         = 0.5
 POST_MOTHER_BERTHING_START_GAP_HOURS  = 1.0
 
@@ -392,28 +708,23 @@ DAYLIGHT_END     = 18
 # ── Internal: export operation timing ────────────────────────────────────────
 EXPORT_DOC_HOURS            = 2
 EXPORT_SAIL_HOURS           = 6
+# Export phases during which a mother is NOT physically available at BIA and must
+# never receive cargo (daughter discharge / MTO offload).  RETURNING
+# covers the post-export return sail + fendering window — including it is what
+# prevents loading a mother that finished exporting but is still hours away at the
+# terminal or fendering on arrival.
+EXPORT_BUSY_STATES = frozenset({"DOC", "SAILING", "HOSE", "IN_PORT", "RETURNING"})
 EXPORT_SAIL_WINDOW_START    = 6
 EXPORT_SAIL_WINDOW_END      = 15
 EXPORT_HOSE_HOURS           = 4
 EXPORT_SERIES_BUFFER_HOURS  = 48
+# Minimum idle time (hours) required after the last daughter cast-off before the
+# export DOC may fire on a primary mother.  This window gives operators and the
+# sim time to confirm the mother's final intake volume before documentation starts.
+# Applies to both natural (export_ready) and forced export departures.
+EXPORT_INTAKE_BUFFER_HOURS  = 2.0
 MOTHER_EXPORT_VOLUME        = 400_000
 
-# ── Internal: SanJulian optimisation parameters ───────────────────────────────
-# SanJulian sits permanently at BIA. It receives daughter discharges like a
-# primary mother but never sails to the export terminal. Instead it transloads
-# to primary mothers via SANJULIAN_TRANSLOAD_RATE_BPH. Transloads trigger when:
-#   T1  SanJulian reaches SANJULIAN_CAPACITY_BBL (force-drain)
-#   T2  SanJulian >= a primary mother's remaining export-volume requirement
-#   T3  A primary mother is idle at BIA and no daughter is arriving same day
-#   T4  SanJulian > SANJULIAN_OPTIM_THRESHOLD_FRAC AND mother has headroom
-SANJULIAN_OPTIM_THRESHOLD_FRAC  = 0.25    # T4: trigger above 25% of capacity
-SANJULIAN_OPTIM_MIN_SPACE_BBL   = 50_000  # T4: mother must have this space free
-SANJULIAN_FENDER_PREP_HOURS     = 1.5
-SANJULIAN_DELAY_THRESHOLD_HOURS = 4.5
-# Dynamic SanJulian daughter accumulation: when ≥ this many daughters are
-# inbound/waiting at BIA, raise sanjulian_daughters_min_threshold by 1 per
-# extra daughter above the base so SanJulian loads more before draining.
-SANJULIAN_DYNAMIC_THRESHOLD_INBOUND = 3   # escalate when ≥3 daughters at BIA
 # Export departure look-ahead: if ≥ this many daughters are inbound/waiting
 # at BIA in the next EXPORT_LOOKFORWARD_HOURS, defer departure unless the
 # mother is physically full (cannot accept another cargo).
@@ -443,23 +754,49 @@ SAIL_HOURS_CH_TO_D      = 3.0   # Cawthorne Channel → Point D
 SAIL_HOURS_D_TO_CHANNEL = SAIL_HOURS_D_TO_CH
 SAIL_HOURS_CHANNEL_TO_B = SAIL_HOURS_CH_TO_BW_OUT + SAIL_HOURS_CROSS_BW + SAIL_HOURS_BW_TO_B
 
+
+def _sail_leg(nominal_h: float, sim=None) -> float:
+    """Return a (possibly stochastic) duration for a sailing leg.
+
+    When ENABLE_VARIABILITY is True, transit duration is sampled from a
+    triangular distribution (cv = VARIABILITY_CV_TRANSIT) and a weather
+    hold event may be added.  The weather hold total is accumulated on
+    sim._weather_hold_hours_total when a Simulation instance is passed.
+
+    Used throughout the sailing state handlers as a drop-in replacement
+    for bare SAIL_HOURS_* constants.  When variability is disabled this
+    returns nominal_h unchanged, making the function zero-overhead in
+    deterministic mode.
+    """
+    hold   = _weather_hold_hours()
+    actual = _variability_sample(nominal_h, VARIABILITY_CV_TRANSIT) + hold
+    if hold > 0 and sim is not None and hasattr(sim, "_weather_hold_hours_total"):
+        sim._weather_hold_hours_total += hold
+        if hasattr(sim, "_sim_stats"):
+            sim._sim_stats.record("weather_hold", 0.0, hold)
+    if sim is not None and hasattr(sim, "_sim_stats") and ENABLE_VARIABILITY:
+        sim._sim_stats.record("transit", nominal_h, actual)
+    return actual
+
 # ── SECTION I: MOTHER VESSELS ────────────────────────────────────────────────
-#  Each row: (Name, Capacity bbl).  SanJulian capacity set in Section E above.
+#  Each row: (Name, Capacity bbl).
 #  Add a new mother by adding a row and updating MOTHER_CAPACITY_BY_NAME below.
 # ─────────────────────────────────────────────────────────────────────────────
 #  Name             Capacity (bbl)   Notes
 # ─────────────────────────────────────────────────────────────────────────────
 MOTHER_PRIMARY_NAME    = "Bryanston"
-MOTHER_SECONDARY_NAME  = "Alkebulan"
-MOTHER_TERTIARY_NAME   = "GreenEagle"
-MOTHER_QUATERNARY_NAME = "SanJulian"   # intermediate — does not export
+MOTHER_SECONDARY_NAME  = "GreenEagle"
+MOTHER_TERTIARY_NAME   = "GreenEagle"   # kept for legacy references — same vessel
+MOTHER_QUINARY_NAME    = "Alkebulan"    # primary exporting mother at Point B (clone of GreenEagle)
 
-ALKEBULAN_CAPACITY_BBL  = 750_000
-ALKEBULAN_EXPORT_TRIGGER_BBL = 665_000
-GREENEAGLE_CAPACITY_BBL = 750_000   # matched to Alkebulan capacity
-GREENEAGLE_EXPORT_TRIGGER_BBL = 680_000   # 90.7% of 750k — keep loading until near-full
+GREENEAGLE_CAPACITY_BBL      = 750_000
+GREENEAGLE_EXPORT_TRIGGER_BBL = 680_000
+# Alkebulan is a primary mother at Point B with identical specification to
+# GreenEagle (same capacity and export trigger).  Defined as clones so the two
+# vessels always stay in sync if GreenEagle's figures are ever retuned.
+ALKEBULAN_CAPACITY_BBL        = GREENEAGLE_CAPACITY_BBL
+ALKEBULAN_EXPORT_TRIGGER_BBL  = GREENEAGLE_EXPORT_TRIGGER_BBL
 # Bryanston uses MOTHER_CAPACITY_BBL (550,000) defined in Section E above.
-# SanJulian uses SANJULIAN_CAPACITY_BBL (450,000) defined in Section E above.
 
 # ── Internal: simulation time step ───────────────────────────────────────────
 TIME_STEP_HOURS = 0.5
@@ -491,19 +828,19 @@ EXPORT_FORCE_SCHEDULE: dict = {}   # {mother_name: [sim_hour, ...]}
 def storage_adjusted_load_cap(base_cap, storage_name, vessel_name=None):
     """Return effective cargo loaded from a storage for a vessel.
 
-    Storage-specific multipliers apply before any explicit operational caps.
+    Storage-specific adjustments apply before any explicit operational caps.
     JasmineS loads 8% above the vessel's normal capacity.
-    Westmore loads 18% below the vessel's normal capacity.
-    PGM loads 60% below the vessel's normal capacity (SantaMonica only).
+    Westmore (Point C) loads exactly 1,000 bbl below the vessel's normal capacity.
+    PGM (Point G) loads ~75% below the vessel's normal capacity (SantaMonica only, ~7k bbl).
     Explicit Point A caps for Bedford/Balham still take precedence.
     """
     cap = int(round(base_cap))
     if storage_name == STORAGE_SECONDARY_NAME:
         cap = int(round(base_cap * JASMINES_LOAD_CAP_MULTIPLIER))
     elif storage_name == STORAGE_TERTIARY_NAME:
-        cap = int(round(base_cap * WESTMORE_LOAD_CAP_MULTIPLIER))
+        cap = max(0, int(round(base_cap)) - WESTMORE_LOAD_CAP_OFFSET_BBL)
     elif storage_name == STORAGE_SENARY_NAME:
-        cap = int(round(base_cap * 0.40))   # 60% less than normal capacity
+        cap = min(int(round(base_cap)), 9_500)   # SantaMonica @ PGM — fixed 9,500 bbl loading limit
     if (vessel_name in POINT_A_LOAD_CAP_VESSELS
             and storage_name in {STORAGE_PRIMARY_NAME, STORAGE_SECONDARY_NAME}):
         cap = min(cap, POINT_A_LOAD_CAP_BBL)
@@ -517,6 +854,8 @@ def _default_vessel_base_capacity(vessel_name):
 def _allowed_default_storages(vessel_name):
     if vessel_name in {"Bedford", "Balham"}:
         return [STORAGE_PRIMARY_NAME, STORAGE_SECONDARY_NAME, "Ibom"]
+    if vessel_name == "Amyla":
+        return list(AMYLA_PERMITTED_STORAGES)
     if vessel_name == "SantaMonica":
         return list(SANTAMONICA_PERMITTED_STORAGES)
     if vessel_name == "Watson":
@@ -563,7 +902,7 @@ if _DEFAULT_EFFECTIVE_LOAD_CAPS:
 #       name="Aldgate",
 #       join_date="2025-02-10",        # or datetime.date(2025, 2, 10)
 #       cargo_capacity=60_000,
-#       permitted_storages=["Chapel", "JasmineS", "Duke"],
+#       permitted_storages=["SanBarth", "JasmineS", "Duke"],
 #   )
 
 @dataclass
@@ -596,12 +935,12 @@ def add_custom_vessel(name, join_date, cargo_capacity, permitted_storages=None):
         Maximum cargo per voyage in barrels (e.g. 60_000).
     permitted_storages : list[str] | None
         Storage names the vessel may load from.  Valid values:
-            "Chapel"    (Point A)
+            "SanBarth"    (Point A)
             "JasmineS"  (Point A)
             "Westmore"  (Point C)
             "Duke"      (Point D)
             "Starturn"  (Point E)
-        Pass None or [] to allow Chapel and JasmineS only (safe default).
+        Pass None or [] to allow SanBarth and JasmineS only (safe default).
     """
     if permitted_storages is None:
         permitted_storages = []
@@ -648,7 +987,7 @@ def set_vessel_resumption(name: str, date_val, storage: str) -> None:
         storage:  Storage to lock to on wake (one of the five storage names).
     """
     _valid_storages = {
-        "Chapel", "JasmineS", "Westmore", "Duke", "Starturn",
+        "SanBarth", "JasmineS", "Westmore", "Duke", "Starturn",
     }
     if name not in VESSEL_NAMES:
         raise ValueError(
@@ -712,8 +1051,9 @@ STORAGE_DISPATCH_OVERRIDES: dict = {}
 DAUGHTER_DISCHARGE_OVERRIDES: dict = {}
 
 STORAGE_CAPACITY_BY_NAME = {name: STORAGE_CAPACITY_BBL for name in STORAGE_NAMES}
+STORAGE_CAPACITY_BY_NAME[STORAGE_PRIMARY_NAME] = SANBARTH_STORAGE_CAPACITY_BBL
 STORAGE_CAPACITY_BY_NAME[STORAGE_SECONDARY_NAME] = 290_000
-STORAGE_CAPACITY_BY_NAME[STORAGE_TERTIARY_NAME] = 270_000
+STORAGE_CAPACITY_BY_NAME[STORAGE_TERTIARY_NAME] = 220_000   # Westmore max stock (reduced from 270k)
 STORAGE_CAPACITY_BY_NAME[STORAGE_QUATERNARY_NAME] = DUKE_STORAGE_CAPACITY_BBL
 STORAGE_CAPACITY_BY_NAME[STORAGE_QUINARY_NAME] = STARTURN_STORAGE_CAPACITY_BBL
 STORAGE_CAPACITY_BY_NAME[STORAGE_SENARY_NAME] = PGM_STORAGE_CAPACITY_BBL
@@ -726,7 +1066,7 @@ STORAGE_PRODUCTION_RATE_BY_NAME[STORAGE_SENARY_NAME] = PGM_PRODUCTION_RATE_BPH
 # -----------------------------------------------------------------
 # DISPATCH BIAS — production-rate preference & position-aware spread
 # -----------------------------------------------------------------
-# High-production storages (Chapel/JasmineS/Westmore) get a small apparent
+# High-production storages (SanBarth/JasmineS/Westmore) get a small apparent
 # gap tightening so they are sorted as more urgent than low-production peers
 # (Duke/Starturn) at similar real risk levels.  Only active within
 # DISPATCH_BIAS_FORECAST_BBL of critical so it never overrides a genuine
@@ -788,39 +1128,46 @@ SPREAD_AC_HOLD_HORIZON = 36.0
 #   {
 #     "start_date": "YYYY-MM-DD",
 #     "end_date": "YYYY-MM-DD",
-#     "rates": {"Chapel": 0, "JasmineS": 0, ...}
+#     "rates": {"SanBarth": 0, "JasmineS": 0, ...}
 #   }
 # ]
 PRODUCTION_RATE_OVERRIDES = []
 STORAGE_CRITICAL_THRESHOLD_BY_NAME = {
-    STORAGE_PRIMARY_NAME: 270_000,
+    STORAGE_PRIMARY_NAME: SANBARTH_STORAGE_CAPACITY_BBL,
     STORAGE_SECONDARY_NAME: 290_000,
     STORAGE_TERTIARY_NAME: 175_000,   # Unsafe when >175k (reduced from 225k)
     STORAGE_QUATERNARY_NAME: 90_000,
     STORAGE_QUINARY_NAME: 70_000,
-    STORAGE_SENARY_NAME: 40_000,      # PGM — full capacity is the trigger (small tank)
+    STORAGE_SENARY_NAME: 28_000,      # PGM — full capacity is the trigger (small tank)
 }
-MOTHER_NAMES = [MOTHER_PRIMARY_NAME, MOTHER_SECONDARY_NAME, MOTHER_TERTIARY_NAME, MOTHER_QUATERNARY_NAME]
+MOTHER_NAMES = [
+    MOTHER_PRIMARY_NAME,      # Bryanston  (primary, exports)
+    MOTHER_SECONDARY_NAME,    # GreenEagle (primary, exports)
+    MOTHER_QUINARY_NAME,      # Alkebulan  (primary, exports — clone of GreenEagle)
+]
 MOTHER_CAPACITY_BY_NAME = {
     MOTHER_PRIMARY_NAME:    MOTHER_CAPACITY_BBL,       # Bryanston  — Section E
-    MOTHER_SECONDARY_NAME:  ALKEBULAN_CAPACITY_BBL,    # Alkebulan  — Section I
-    MOTHER_TERTIARY_NAME:   GREENEAGLE_CAPACITY_BBL,   # GreenEagle — Section I
-    MOTHER_QUATERNARY_NAME: SANJULIAN_CAPACITY_BBL,    # SanJulian  — Section E
+    MOTHER_SECONDARY_NAME:  GREENEAGLE_CAPACITY_BBL,   # GreenEagle — Section I
+    MOTHER_QUINARY_NAME:    ALKEBULAN_CAPACITY_BBL,    # Alkebulan  — Section I (== GreenEagle)
 }
 MOTHER_EXPORT_TRIGGER_BY_NAME = {
     MOTHER_PRIMARY_NAME:   MOTHER_EXPORT_TRIGGER,
-    MOTHER_SECONDARY_NAME: ALKEBULAN_EXPORT_TRIGGER_BBL,
-    MOTHER_TERTIARY_NAME:  GREENEAGLE_EXPORT_TRIGGER_BBL,
+    MOTHER_SECONDARY_NAME: GREENEAGLE_EXPORT_TRIGGER_BBL,
+    MOTHER_QUINARY_NAME:   ALKEBULAN_EXPORT_TRIGGER_BBL,
 }
 
 # Startup-day (Day 1) Point B nomination override.
 # When enabled, Point B auto-prioritization is disabled only on Day 1 and
 # assignment must come from this manual vessel->mother mapping.
 # Day 2+ always uses the standard strict Point B prioritization rules.
-STARTUP_DAY_DISABLE_POINT_B_PRIORITY = True
+STARTUP_DAY_DISABLE_POINT_B_PRIORITY = False
 STARTUP_DAY_POINT_B_MANUAL_NOMINATIONS = {
-    # Example:
-    # "Sherlock": MOTHER_PRIMARY_NAME,
+    # Safety-net for Balham startup: it is seeded in BERTHING_B at GreenEagle
+    # from Day 1.  If it is ever displaced back to WAITING_BERTH_B on Day 1
+    # (e.g. by a concurrent-berth edge case), this nomination ensures it returns
+    # to GreenEagle rather than waiting indefinitely for auto-prioritisation.
+    "Balham": MOTHER_SECONDARY_NAME,   # GreenEagle — mirrors app Day-1 position
+    "Woodstock": MOTHER_PRIMARY_NAME,  # Bryanston — default Day-1 discharge pairing
 }
 
 # Test seed: force selected vessels to Point B at full load on startup.
@@ -843,6 +1190,8 @@ STATUS_CODES = {
     "CAST_OFF_B"        : "Cast-off from mother vessel",
     "WAITING_CAST_OFF"  : "Waiting for cast-off window",
     "EXPORT_DOC"        : "Mother export documentation",
+    "EXPORT_INTAKE_BUFFER" : "Export ready but waiting for post-discharge intake buffer (2h settling)",
+    "CONCURRENT_BERTH_ABORT" : "Concurrent berth guard: vessel aborted — another actor already occupies this berth",
     "EXPORT_SAIL"       : "Sailing to export terminal",
     "EXPORT_HOSE"       : "Hose connection at export terminal",
     "SAILING_AB"          : "Sailing A/C -> Breakwater (1.5h)",
@@ -876,15 +1225,24 @@ STATUS_CODES = {
     "SAILING_B_TO_F"        : "Sailing BIA -> Ibom (swap takeover)",
     "PF_LOADING"            : "Loading at Point F",
     "PF_SWAP"               : "Point F swap/takeover in progress",
-    # SanJulian transload events — SanJulian behaves like a daughter vessel
-    # when pumping to a primary mother (BERTHING_B → HOSE_CONNECT_B →
-    # DISCHARGING → CAST_OFF_B), with matching log events on both sides.
-    "SJ_TRANSLOAD_START"    : "SanJulian: starting transload cycle to primary mother",
-    "SJ_TRANSLOAD_COMPLETE" : "SanJulian: transload cycle to primary mother complete",
-    "SJ_TRANSLOAD_ABORT"    : "SanJulian: transload aborted — target left Point B",
-    "SJ_FENDER_PREP"        : "SanJulian: fender preparation in progress",    # Mid-simulation mother unavailability window
+    # Mid-simulation mother unavailability window
     "MOTHER_UNAVAILABLE_START" : "Mother vessel entered scheduled unavailability window",
     "MOTHER_UNAVAILABLE_END"   : "Mother vessel exited scheduled unavailability window — resuming operations",
+    # Multiple Transient Operation events
+    "MTO_TRANSIENT_NOMINATED"      : "MTO: vessel nominated as temporary storage at Point B",
+    "MTO_DISCHARGE_TO_TRANSIENT"   : "MTO: vessel discharging cargo to transient storage vessel",
+    "MTO_TRANSFER_COMPLETE"        : "MTO: vessel-to-vessel cargo transfer complete",
+    "MTO_TRANSIENT_PRIORITY_BERTH" : "MTO: transient storage vessel claiming priority berth at mother",
+    "MTO_PARCEL_LIMIT_REACHED"     : "MTO: transient vessel reached max parcel count — forcing offload",
+    "MTO_TRANSIENT_CAP_REACHED"    : "MTO: transient vessel at storage capacity — forcing offload",
+    "MTO_ABORT_INSUFFICIENT_SPACE" : "MTO: regulatory abort — mother lacks space for full cargo; re-anchoring",
+    "MTO_REANCHOR"                 : "MTO: transient vessel re-anchoring at BIA — awaiting qualifying mother",
+    # Universal hard-capacity abort (replaces the old GreenEagle-only GREENEAGLE_CAPACITY_ABORT).
+    # Fires at HOSE_CONNECT_B → DISCHARGING when vessel cargo exceeds live mother headroom.
+    "MOTHER_CAPACITY_ABORT"        : "Hard-cap abort: vessel cargo exceeds mother headroom — cast off and reassign",
+    "GREENEAGLE_CAPACITY_ABORT"    : "Hard-cap abort (GreenEagle): vessel cargo exceeds capacity — cast off and reassign",
+    "DORMANCY_ACTIVATED"           : "Mid-sim dormancy window started — vessel idle until resumption date",
+    "DORMANCY_DEFERRED"            : "Dormancy deferred — vessel has cargo on board; will activate after BIA discharge",
 }
 
 
@@ -893,7 +1251,7 @@ class ThirdPartyVessel:
     """ZeeZee — third-party tanker arriving at Point B fully loaded once a month.
 
     Arrives at BIA on ZEEZEE_SCHEDULE day_of_month each calendar month.
-    Discharges to the earliest available PRIMARY mother (never SanJulian).
+    Discharges to the earliest available mother vessel.
     Priority rules:
       - If daughter-vessel queue is blocking all primary berths, ZeeZee waits
         up to ZEEZEE_MAX_DAUGHTER_WAIT_HOURS (48 h = 2 days) then forces a
@@ -905,7 +1263,7 @@ class ThirdPartyVessel:
       WAITING_B → BERTHING_B → HOSE_CONNECT_B → DISCHARGING → CAST_OFF_B → None
     """
 
-    DISCHARGE_RATE_BPH = 20_000   # pump rate while discharging to mother
+    DISCHARGE_RATE_BPH = 20_000   # fallback only — overridden by VESSEL_DISCHARGE_RATE_BPH["ZeeZee"]
 
     def __init__(self, volume_bbl: float, api: float, arrival_t: float):
         self.name            = "ZeeZee"
@@ -926,6 +1284,7 @@ class ThirdPartyVessel:
         return f"ZeeZee[{self.status}|{self.cargo_bbl:,.0f}bbl]"
 
 
+
 class DaughterVessel:
     def __init__(self, name, start_offset_hours=0, cargo_capacity=None):
         self.name = name
@@ -936,6 +1295,11 @@ class DaughterVessel:
         self.operation_end   = None
         self.next_event_time = start_offset_hours
         self.current_voyage = 0
+        # Per-vessel trip counter — incremented only when this vessel starts a
+        # genuinely new loading voyage.  Replaces the old global voyage_counter
+        # so that each vessel's codes are sequential (STM-001, STM-002, …)
+        # regardless of what other vessels are doing simultaneously.
+        self._vessel_voyage_counter: int = 0
         self.queue_position = None
         self.assigned_storage = None
         self.assigned_load_hours = None
@@ -962,6 +1326,34 @@ class DaughterVessel:
         # Date-shift: sim-hour on or after which loading may begin.
         # None = no date restriction; vessel loads as soon as berth is free.
         self._jmp_load_after_hour   = None
+        # ── Multiple Transient Operation state ────────────────────────────
+        # Set to the day_key (int) on which this vessel was nominated as
+        # transient storage.  None when not an active MTO transient.
+        # Cleared in the WAITING_BERTH_B handler after the priority berth
+        # is claimed.
+        self._mto_transient_since_day = None
+        self._pf_load_ceiling  = None  # optional cap for startup-day Ibom loading
+        # Number of parcels (discharger transfers) received so far while
+        # acting as transient storage.  Used with MTO_MAX_PARCELS_BEFORE_OFFLOAD
+        # to decide when to stop accumulating and seek an offloading window.
+        self._mto_parcels_received: int = 0
+        # Flag set when this vessel transitions from transient storage to
+        # actively offloading to a primary mother. Causes DISCHARGE_START
+        # to stamp VoyageCode with an "A" suffix (e.g. AMY-000A) so the
+        # MTO discharge is distinguishable from a normal cargo delivery.
+        self._is_mto_offload: bool = False
+        # Tracks the last WAITING_BERTH_B log state to suppress duplicate entries
+        # when half-step scanning produces no change in assignment or slot time.
+        self._wb_last_logged_start:  object = None
+        self._wb_last_logged_mother: object = None
+        # Mid-sim dormancy: vessel operates normally until dormancy_start_hour,
+        # then becomes dormant (IDLE_A) until _dormancy_end_hour (=resumption_hour).
+        self.dormancy_start_hour: object = None
+        self._dormancy_end_hour:  object = None   # resumption sim-hour for mid-sim window
+        self._dormancy_pending:   bool   = False  # deferred dormancy — activate after next BIA discharge
+        # Tracks when the MTO transient berth is free for the next discharger.
+        # Set to transfer_end_t each time a discharger starts its approach.
+        self._mto_berth_free_at: float = 0.0
 
     def __repr__(self):
         return f"{self.name}[{self.status}|cargo={self.cargo_bbl:,}bbl]"
@@ -973,7 +1365,10 @@ class Simulation:
             name: min(STORAGE_INIT_BBL, STORAGE_CAPACITY_BY_NAME[name])
             for name in STORAGE_NAMES
         }
-        self.mother_bbl = {name: MOTHER_INIT_BBL for name in MOTHER_NAMES}
+        self.mother_bbl = {
+            name: MOTHER_INIT_BBL_BY_NAME.get(name, MOTHER_INIT_BBL)
+            for name in MOTHER_NAMES
+        }
         self.total_exported = 0
         self.total_produced = 0
         self.total_spilled = 0
@@ -1008,6 +1403,10 @@ class Simulation:
         self.export_end_time = {name: None for name in MOTHER_NAMES}
         self.next_export_allowed_at = 0.0
         self.last_export_mother = None
+        # Tracks the sim-hour of the most recent daughter cast-off from each mother.
+        # The export DOC may not fire until EXPORT_INTAKE_BUFFER_HOURS after this
+        # timestamp, giving a clean settling window before documentation begins.
+        self.export_intake_last_cast_off = {name: 0.0 for name in MOTHER_NAMES}
         # Startup seed: mothers away at export at t=0.  Keyed by mother name,
         # value is the sim-hour they are available again.  Consulted by
         # mother_is_at_point_b so the full export state machine is never
@@ -1016,57 +1415,38 @@ class Simulation:
         self.mother_seeded_away_until = {name: 0.0 for name in MOTHER_NAMES}
         # Mid-simulation unavailability windows — keyed by mother name, value is
         # a list of (start_h, end_h) sim-hour tuples.  mother_is_at_point_b()
-        # returns False for any t inside a window.  Daughters and SanJulian
-        # transloads are automatically rerouted to available mothers.
+        # returns False for any t inside a window.  Daughters
+        # daughters are automatically rerouted to available mothers.
         self.mother_unavailability_windows: dict = {name: [] for name in MOTHER_NAMES}
+        self.export_unavailability_windows: list = []   # list of (start_h, end_h) tuples
+        # Serial-discharge lock registry — {day_key: set(mother_names_currently_locked)}.
+        # A mother's name is in the set while a pumping operation is active.
+        # The lock is set at pump-start and cleared at cast-off completion.
+        # Using a set() means the same mother can be locked → released → locked
+        # multiple times per day, enabling two or more serial discharges on the
+        # same calendar day when the first vessel completes early enough.
+        # Covers Bryanston and GreenEagle equally.
         self.point_b_day_assigned_mothers = {}
+        # Maps mother_name → the day_key on which pumping started (used by
+        # _point_b_deregister_mother so an overnight cast-off deregisters from
+        # the correct pump-start day, not from the (different) cast-off day).
+        self._point_b_registered_day: dict = {}
 
-        # ── SanJulian — intermediate floating storage ─────────────────────────
-        # SanJulian NEVER joins the export_state / export_ready / export_sail
-        # machinery.  When a transload trigger fires it behaves exactly like a
-        # daughter vessel: it steps through BERTHING_B → HOSE_CONNECT_B →
-        # DISCHARGING → CAST_OFF_B against the target primary mother, reserves
-        # the mother's berth slot, and emits exactly the same log events so the
-        # mother vessel indicator reflects the incoming transload.
-        #
-        # sanjulian_status : None | "BERTHING_B" | "HOSE_CONNECT_B" |
-        #                    "DISCHARGING" | "CAST_OFF_B"
-        # sanjulian_target : name of the primary mother being loaded
-        # sanjulian_amount : bbl committed to this transload cycle
-        # sanjulian_next_t : sim-hour when the current phase completes
-        self.sanjulian_status           = None
-        self.sanjulian_target           = None
-        self.sanjulian_amount           = 0.0
-        self.sanjulian_next_t           = None
-        # sanjulian_fender_ready_t: sim-hour when fender preparation completes.
-        # Set to t + SANJULIAN_FENDER_PREP_HOURS after every cast-off from a
-        # primary mother.  Until this time: daughters may not berth SanJulian,
-        # and SanJulian may not start a new transload cycle (fender prep before
-        # berthing the next mother also uses this gate).
-        self.sanjulian_fender_ready_t   = 0.0
-        # sanjulian_daughters_loaded: number of daughter vessels that have
-        # completed a full discharge to SanJulian since her last offload to a
-        # primary mother.  SanJulian may not offload (T2/T3/T4) until this
-        # reaches sanjulian_daughters_min_threshold.
-        # Resets to 0 after each completed transload cycle.
-        # T1 (near-capacity force-drain) bypasses this gate to prevent overflow.
-        self.sanjulian_daughters_loaded        = 0
-        # sanjulian_daughters_min_threshold: dynamically adjusted after startup
-        # seeding.  Any vessels already in BERTHING_B/HOSE_CONNECT_B/DISCHARGING
-        # at SanJulian from t=0 complete early and are counted by the normal
-        # DISCHARGING handler — we raise the threshold by that count so those
-        # pre-existing completions do NOT satisfy the requirement.  Only fresh
-        # arrivals that occur during the sim run count toward the 2-daughter gate.
-        self.sanjulian_daughters_min_threshold = 2
-        # Legacy aliases kept for backward compat with app summary reads
-        self.sanjulian_transload_state  = None   # set to dict when active
-        self.sanjulian_transload_end_t  = None
-        self.sanjulian_total_transloaded = 0.0
-        # Remove SanJulian from export machinery — it will never export
-        _sj = MOTHER_QUATERNARY_NAME
-        self.export_ready[_sj]        = False
-        self.export_ready_since[_sj]  = None
-        self.export_state[_sj]        = None   # locked — never changes
+        # ── Calibration & variability infrastructure ──────────────────────────
+        # SimulationStats records planned-vs-actual durations for post-run
+        # calibration reporting.  Always initialised; only populated when
+        # ENABLE_VARIABILITY is True (but the object is safe to query either way).
+        self._sim_stats = SimulationStats()
+        # Seed the RNG for this run.  A fixed seed → reproducible stochastic runs.
+        if ENABLE_VARIABILITY and VARIABILITY_RANDOM_SEED is not None:
+            random.seed(VARIABILITY_RANDOM_SEED)
+        # ── Weather disruption tracking ───────────────────────────────────────
+        # Running total of weather hold hours injected into transit operations.
+        self._weather_hold_hours_total = 0.0
+        # Per-day stochastic production rate overrides — populated by
+        # run_daily_preops_storage_reassessment when ENABLE_VARIABILITY is True.
+        # Empty in deterministic mode (production_rate_bph_at skips it).
+        self.production_rate_override_by_name: dict = {}
         self.storage_critical_active = {name: False for name in STORAGE_NAMES}
         self.point_f_vessels = ["Bedford", "Balham"]
         self.point_f_active_loader = "Balham"
@@ -1078,10 +1458,14 @@ class Simulation:
         self.ac_post_bw_reassess_active = False
         self.ac_post_bw_next_reassess_at = None
         self.daily_preops_last_day_key = -1
+        # ── Multiple Transient Operation tracking ────────────────────────────
+        # Set of calendar day-keys (int(t//24)) on which MTO has already fired.
+        # Ensures exactly one transient nomination per calendar day.
+        self._mto_days_fired: dict = {}   # {day_key: fire_count} — max 2 per day
 
         # ── Custom vessel injection ───────────────────────────────────────────
         # Maps vessel_name → frozenset of permitted storage names.
-        # An empty set means "Chapel + JasmineS only" (safe default).
+        # An empty set means "SanBarth + JasmineS only" (safe default).
         # Populated at join time; consulted by storage_allowed_for_vessel().
         self._custom_vessel_storage_permissions: dict = {}
         # Resolve each registered spec's join hour relative to _SIM_EPOCH.
@@ -1119,78 +1503,62 @@ class Simulation:
         # production has a constant API — no blending needed.
         for vv in self.vessels:
             self.vessel_api[vv.name] = 0.0
-        # Vessels that start at Point B (idle, no cargo, waiting for return allocation)
-        _POINT_B_START = {"Sherlock", "Laphroaig", "Rathbone"}
+        # ── Vessel startup positions ──────────────────────────────────────────
+        # Default startup scenario:
+        #   Sherlock, Laphroaig, Rathbone, SantaMonica, Bagshot, Watson, Berners
+        #     → cargo_bbl = 0, status = SAILING_BA (Leg 1 — returning to SanBarth)
+        #   Bedford  → PF_LOADING at Ibom (active loader)
+        #   Balham   → BERTHING_B at GreenEagle (just arrived from Ibom)
+        # Overridden at runtime when vessel_states_json or POINT_B_DISTRIBUTION_TEST_MODE
+        # supplies explicit positions.
+
+        _RETURNING_LEG1 = {
+            "Sherlock", "Laphroaig", "Rathbone", "SantaMonica",
+            "Bagshot",  "Watson",    "Amyla",
+        }
         _seeded_startups = set()
         if POINT_B_DISTRIBUTION_TEST_MODE:
             _seeded_startups = set(POINT_B_TEST_STARTUP_FULL_LOAD_NOMINATIONS.keys())
 
         for vv in self.vessels:
             if vv.name == "Bedford":
-                # Bedford starts as active Ibom loader, cargo below swap trigger
                 vv.status          = "PF_LOADING"
                 vv.target_point    = "F"
                 vv.cargo_bbl       = 30_000
                 vv.next_event_time = 0.0
                 vv._voyage_assigned = True
                 vv.current_voyage   = 1
+                vv._vessel_voyage_counter = 1
                 vv.voyage_code      = make_voyage_code(vv.name, 1)
-                self.vessel_api[vv.name] = IBOM_API  # constant; no blending needed
+                self.vessel_api[vv.name] = IBOM_API
+
             elif vv.name == "Balham":
-                # Balham starts berthing Alkebulan at BIA, full load (loaded from Ibom)
                 vv.status           = "BERTHING_B"
                 vv.target_point     = "B"
                 vv.cargo_bbl        = 85_000
-                vv.assigned_mother  = "Alkebulan"
-                vv.next_event_time  = BERTHING_DELAY_HOURS   # completes berthing at 0.5 h
+                vv.assigned_mother  = MOTHER_SECONDARY_NAME   # GreenEagle
+                vv.next_event_time  = BERTHING_DELAY_HOURS
                 vv._voyage_assigned = True
                 vv.current_voyage   = 1
+                vv._vessel_voyage_counter = 1
                 vv.voyage_code      = make_voyage_code(vv.name, 1)
-                # Balham loads from Ibom (Point F) — cargo API is constant Ibom API
                 self.vessel_api[vv.name] = IBOM_API
-            elif vv.name == "Bagshot" and vv.name not in _seeded_startups:
-                # Bagshot starts hose-connected at Bryanston, ready to commence discharge
-                _bg_cap = VESSEL_CAPACITIES.get("Bagshot", DAUGHTER_CARGO_BBL)
-                vv.status           = "HOSE_CONNECT_B"
-                vv.target_point     = "B"
-                vv.cargo_bbl        = _bg_cap
-                vv.assigned_mother  = MOTHER_PRIMARY_NAME   # Bryanston
-                vv.next_event_time  = 0.0                   # fires immediately at t=0
-                vv._voyage_assigned = True
-                vv.current_voyage   = 1
-                vv.voyage_code      = make_voyage_code(vv.name, 1)
-                self.vessel_api[vv.name] = STORAGE_API.get(STORAGE_PRIMARY_NAME, 0.0)
-                self.log_event(0, vv.name, "HOSE_CONNECTION_START_B",
-                               f"Hose connected at {MOTHER_PRIMARY_NAME} — ready to commence discharge "
-                               f"({_bg_cap:,} bbl, started at t=0)",
-                               voyage_num=vv.current_voyage,
-                               mother=MOTHER_PRIMARY_NAME)
-            elif vv.name == "Watson" and vv.name not in _seeded_startups:
-                # Watson starts hose-connected at GreenEagle, ready to commence discharge
-                _wt_cap = VESSEL_CAPACITIES.get("Watson", DAUGHTER_CARGO_BBL)
-                vv.status           = "HOSE_CONNECT_B"
-                vv.target_point     = "B"
-                vv.cargo_bbl        = _wt_cap
-                vv.assigned_mother  = MOTHER_TERTIARY_NAME  # GreenEagle
-                vv.next_event_time  = 0.0                   # fires immediately at t=0
-                vv._voyage_assigned = True
-                vv.current_voyage   = 1
-                vv.voyage_code      = make_voyage_code(vv.name, 1)
-                self.vessel_api[vv.name] = STORAGE_API.get(STORAGE_PRIMARY_NAME, 0.0)
-                self.log_event(0, vv.name, "HOSE_CONNECTION_START_B",
-                               f"Hose connected at {MOTHER_TERTIARY_NAME} — ready to commence discharge "
-                               f"({_wt_cap:,} bbl, started at t=0)",
-                               voyage_num=vv.current_voyage,
-                               mother=MOTHER_TERTIARY_NAME)
-            elif vv.name in _POINT_B_START:
-                # Start at BIA waiting for return-stock allocation
-                vv.status           = "WAITING_RETURN_STOCK"
-                vv.target_point     = "B"
+
+            elif vv.name in _RETURNING_LEG1 and vv.name not in _seeded_startups:
+                # Returning to SanBarth — empty, on Leg 1 of the return voyage.
+                # next_event_time set so the vessel arrives at Point A at
+                # t = SAIL_HOURS_B_TO_A (6h), spread slightly to avoid a
+                # simultaneous thundering-herd at the storage berths.
+                _spread = list(sorted(_RETURNING_LEG1)).index(vv.name) * 0.5
+                vv.status           = "SAILING_BA"
+                vv.target_point     = "A"
                 vv.cargo_bbl        = 0
-                vv.next_event_time  = 0.0
-                vv._voyage_assigned = True
-                vv.current_voyage   = 1
-                vv.voyage_code      = make_voyage_code(vv.name, 1)
+                vv.next_event_time  = _sail_leg(SAIL_HOURS_B_TO_A, self) + _spread
+                vv._voyage_assigned = False   # fresh voyage assigned on IDLE_A
+                vv.current_voyage   = 0
+                vv._vessel_voyage_counter = 0
+                vv.voyage_code      = ""
+                self.vessel_api[vv.name] = 0.0
 
         if POINT_B_DISTRIBUTION_TEST_MODE:
             for vv in self.vessels:
@@ -1205,6 +1573,7 @@ class Simulation:
                 vv.next_event_time = 0.0
                 vv._voyage_assigned = True
                 vv.current_voyage = max(vv.current_voyage, 1)
+                vv._vessel_voyage_counter = vv.current_voyage
                 vv.voyage_code    = make_voyage_code(vv.name, vv.current_voyage)
                 self.vessel_api[vv.name] = STORAGE_API.get(STORAGE_PRIMARY_NAME, 0.0)
                 self.log_event(
@@ -1225,31 +1594,21 @@ class Simulation:
             if vv.status == "BERTHING_B":
                 _disch_rate_init = VESSEL_DISCHARGE_RATE_BPH.get(vv.name)
                 _disch_hrs_init = (vv.cargo_bbl / _disch_rate_init) if _disch_rate_init else DISCHARGE_HOURS
-                _end = BERTHING_DELAY_HOURS + HOSE_CONNECTION_HOURS + _disch_hrs_init
+                _pump_end_init   = BERTHING_DELAY_HOURS + HOSE_CONNECTION_HOURS + _disch_hrs_init
+                _end = _berth_free_at(_pump_end_init)   # accounts for nighttime cast-off delay
             elif vv.status == "HOSE_CONNECT_B":
                 _disch_rate_init = VESSEL_DISCHARGE_RATE_BPH.get(vv.name)
                 _disch_hrs_init = (vv.cargo_bbl / _disch_rate_init) if _disch_rate_init else DISCHARGE_HOURS
-                _end = HOSE_CONNECTION_HOURS + _disch_hrs_init
+                _end = _berth_free_at(HOSE_CONNECTION_HOURS + _disch_hrs_init)
             elif vv.status == "DISCHARGING":
                 _disch_rate_init = VESSEL_DISCHARGE_RATE_BPH.get(vv.name)
-                _end = (vv.cargo_bbl / _disch_rate_init) if _disch_rate_init else DISCHARGE_HOURS
+                _disch_hrs_init  = (vv.cargo_bbl / _disch_rate_init) if _disch_rate_init else DISCHARGE_HOURS
+                _end = _berth_free_at(_disch_hrs_init)
             else:
                 continue
             self.mother_berth_free_at[mother_name] = max(self.mother_berth_free_at[mother_name], _end)
             initial_gate_end = max(initial_gate_end, _end)
         self.next_mother_berthing_start_at = initial_gate_end
-        # ── Adjust SanJulian daughter-minimum threshold for pre-seeded vessels ──
-        # Count vessels already in BERTHING_B / HOSE_CONNECT_B / DISCHARGING at
-        # SanJulian from t=0.  These will complete early in the run and increment
-        # sanjulian_daughters_loaded via the normal DISCHARGING handler.  We raise
-        # the threshold by that count so that only freshly arriving daughters (those
-        # that dock during this sim run) count toward the 2-vessel minimum.
-        _sj_preseeded = sum(
-            1 for vv in self.vessels
-            if vv.assigned_mother == MOTHER_QUATERNARY_NAME
-            and vv.status in {"BERTHING_B", "HOSE_CONNECT_B", "DISCHARGING"}
-        )
-        self.sanjulian_daughters_min_threshold = 2 + _sj_preseeded
         # Sim-level Ibom tracking: Bedford active, no swap pending
         self.point_f_active_loader     = "Bedford"
         self.point_f_swap_pending_for  = None
@@ -1264,6 +1623,10 @@ class Simulation:
         for _vname, _rentry in _VESSEL_RESUMPTION_DATES.items():
             _rv = next((vv for vv in self.vessels if vv.name == _vname), None)
             if _rv is None:
+                continue
+            if _SIM_EPOCH is None:
+                # Epoch not set — skip resumption seeding to avoid crash;
+                # set_sim_epoch() must be called before Simulation() is instantiated.
                 continue
             _rdate = _rentry["date"]
             if isinstance(_rdate, datetime):
@@ -1407,6 +1770,12 @@ class Simulation:
 
     def production_rate_bph_at(self, storage_name, t):
         base_rate = STORAGE_PRODUCTION_RATE_BY_NAME.get(storage_name, 0.0)
+        # Per-day stochastic variability override (set by run_daily_preops when
+        # ENABLE_VARIABILITY is True; empty dict in deterministic mode).
+        if hasattr(self, "production_rate_override_by_name"):
+            var_rate = self.production_rate_override_by_name.get(storage_name)
+            if var_rate is not None:
+                base_rate = var_rate
         if not self.production_rate_overrides:
             return base_rate
         current_date = self.hours_to_dt(t).date()
@@ -1416,13 +1785,21 @@ class Simulation:
                     return rule["rates"][storage_name]
         return base_rate
 
-    def storage_load_hours(self, storage_name, cargo_bbl, vessel_name=None):
+    def storage_load_hours(self, storage_name, cargo_bbl, vessel_name=None,
+                           record_stats: bool = True):
         """Return loading duration in hours for cargo_bbl loaded at storage_name.
-        Woodstock, Bagshot and Rathbone load at CHAPEL_LOAD_RATE_SLOW_BPH (5,000 bph)
-        when loading from Chapel; all other vessel/storage combinations use the
-        standard rate map."""
+
+        When ENABLE_VARIABILITY is True the nominal duration is perturbed by a
+        triangular sample (cv = VARIABILITY_CV_LOADING) and an equipment/
+        inspection delay may be added.  Planned vs actual is recorded in
+        self._sim_stats for post-run calibration.
+
+        Woodstock, Bagshot and Rathbone load at SANBARTH_LOAD_RATE_SLOW_BPH (5,000 bph)
+        when loading from SanBarth; all other vessel/storage combinations use the
+        standard rate map.
+        """
         _RATE_MAP = {
-            STORAGE_PRIMARY_NAME:   CHAPEL_LOAD_RATE_BPH,
+            STORAGE_PRIMARY_NAME:   SANBARTH_LOAD_RATE_BPH,
             STORAGE_SECONDARY_NAME: JASMINES_LOAD_RATE_BPH,
             STORAGE_TERTIARY_NAME:  WESTMORE_LOAD_RATE_BPH,
             STORAGE_QUATERNARY_NAME: DUKE_LOAD_RATE_BPH,
@@ -1431,10 +1808,18 @@ class Simulation:
         }
         rate = _RATE_MAP.get(storage_name)
         if rate:
-            if storage_name == STORAGE_PRIMARY_NAME and vessel_name in CHAPEL_SLOW_LOADERS:
-                rate = CHAPEL_LOAD_RATE_SLOW_BPH
-            return cargo_bbl / rate
-        return LOAD_HOURS  # fallback for unknown storages
+            if storage_name == STORAGE_PRIMARY_NAME and vessel_name in SANBARTH_SLOW_LOADERS:
+                rate = SANBARTH_LOAD_RATE_SLOW_BPH
+            nominal = cargo_bbl / rate
+        else:
+            nominal = LOAD_HOURS  # fallback for unknown storages
+
+        # Apply variability
+        actual = (_variability_sample(nominal, VARIABILITY_CV_LOADING)
+                  + _equipment_delay_hours())
+        if record_stats and hasattr(self, "_sim_stats"):
+            self._sim_stats.record("loading", nominal, actual)
+        return actual
 
     def effective_load_cap(self, vessel_name, storage_name):
         """Return the loading volume cap for vessel at storage_name.
@@ -1451,11 +1836,14 @@ class Simulation:
 
     def loading_start_threshold(self, storage_name, cargo_bbl):
         if storage_name in (STORAGE_QUATERNARY_NAME, STORAGE_QUINARY_NAME, STORAGE_SENARY_NAME):
-            # Duke/Starturn/PGM rule: load can commence once stock is at least
-            # nominated cargo plus fixed 5,000 bbl dead-stock buffer.
-            required = cargo_bbl + DUKE_STARTURN_DEAD_STOCK_BBL
+            # Duke/Starturn/PGM rule: per-storage dead-stock factor applies.
+            # Vessels must not drain a small tank below a safe reserve.
+            _dsf = DEAD_STOCK_FACTOR_BY_STORAGE.get(storage_name, DEAD_STOCK_FACTOR)
+            required = max(_dsf * cargo_bbl, cargo_bbl + DUKE_STARTURN_DEAD_STOCK_BBL)
             return min(required, STORAGE_CAPACITY_BY_NAME[storage_name])
-        required = DEAD_STOCK_FACTOR * cargo_bbl
+        # SanBarth / JasmineS / Westmore: per-storage factor (default 1.75)
+        _dsf = DEAD_STOCK_FACTOR_BY_STORAGE.get(storage_name, DEAD_STOCK_FACTOR)
+        required = _dsf * cargo_bbl
         return min(required, STORAGE_CAPACITY_BY_NAME[storage_name])
 
     def storage_allowed_for_vessel(self, storage_name, vessel_name):
@@ -1463,7 +1851,7 @@ class Simulation:
         # entry exists, use it exclusively — skip all standard permission sets.
         if vessel_name in self._custom_vessel_storage_permissions:
             allowed = self._custom_vessel_storage_permissions[vessel_name]
-            # Empty set means "Chapel + JasmineS only" (safe Point-A default)
+            # Empty set means "SanBarth + JasmineS only" (safe Point-A default)
             if not allowed:
                 return storage_name in (STORAGE_PRIMARY_NAME,
                                         STORAGE_SECONDARY_NAME)
@@ -1474,6 +1862,8 @@ class Simulation:
             return storage_name in WATSON_PERMITTED_STORAGES
         if vessel_name == "Laphroaig":
             return storage_name in LAPHROAIG_PERMITTED_STORAGES
+        if vessel_name == "Amyla":
+            return storage_name in AMYLA_PERMITTED_STORAGES
         if vessel_name in POINT_A_ONLY_VESSELS and STORAGE_POINT.get(storage_name) != "A":
             return False
         if storage_name == STORAGE_TERTIARY_NAME and vessel_name not in WESTMORE_PERMITTED_VESSELS:
@@ -1564,19 +1954,9 @@ class Simulation:
             return fallback, threshold_by_storage[fallback], threshold_by_storage
 
         def rank_key(storage_name):
-            stock    = self.storage_bbl[storage_name]
-            critical = STORAGE_CRITICAL_THRESHOLD_BY_NAME[storage_name]
-            above_critical = 0 if stock >= critical else 1
-            raw_gap  = abs(stock - critical)
-            # Apply a small production-rate bias: compress the apparent gap for
-            # high-production storages so they are preferred over low-production
-            # peers at similar risk levels (gentle nudge, not an override).
-            if raw_gap <= DISPATCH_BIAS_FORECAST_BBL:
-                bias = self.production_rate_bias_factor(storage_name)
-                effective_gap = raw_gap * (1.0 - bias)
-            else:
-                effective_gap = raw_gap
-            return (above_critical, effective_gap, -stock, storage_name)
+            # Use the same rank tuple as storage_dispatch_rank so the two
+            # allocation paths are always consistent.
+            return self.storage_dispatch_rank(storage_name)
 
         selected = min(eligible, key=rank_key)
         return selected, threshold_by_storage[selected], threshold_by_storage
@@ -1728,15 +2108,23 @@ class Simulation:
             return sim_dl_today + 24
 
     def next_daylight_hourly_berth_check(self, current_hour, point=None):
-        """Return next hourly berthing recheck time in daylight window.
-        If currently in daylight, checks again in 1 hour; otherwise at next
-        daylight berthing window start."""
+        """Return next berthing recheck time during daylight window.
+
+        Vessels waiting for a berth at Point B scan every TIME_STEP_HOURS
+        (0.5h) during daylight — the same cadence used by vessels scanning
+        for available berths at loading points.  This ensures that the moment
+        a mother's berth frees up (after a discharging vessel casts off), the
+        waiting daughter is immediately reallocated to it rather than waiting
+        up to an hour for the next check.
+        """
         wall_h = (current_hour + SIM_HOUR_OFFSET) % 24
         if BERTHING_START <= wall_h < BERTHING_END:
-            nxt = round(current_hour + 1.0, 2)
+            # Scan every half-step during daylight
+            nxt = round(current_hour + TIME_STEP_HOURS, 2)
             wall_next = (nxt + SIM_HOUR_OFFSET) % 24
             if BERTHING_START <= wall_next < BERTHING_END:
                 return nxt
+        # Outside daylight — jump to next daylight window start
         days_elapsed = int(current_hour // 24)
         sim_bs_today = days_elapsed * 24 + (BERTHING_START - SIM_HOUR_OFFSET)
         if current_hour <= sim_bs_today:
@@ -1812,121 +2200,337 @@ class Simulation:
         return False
 
     def next_berthing_window(self, current_hour, point=None):
-        """Return the earliest sim-hour >= current_hour that falls within the
-        wall-clock berthing window [BERTHING_START, BERTHING_END) with no cast-off conflict.
-        Uses SIM_HOUR_OFFSET to convert sim-hours to wall-clock hours."""
+        """Return earliest sim-hour >= current_hour within the daylight berthing window.
+
+        No cast-off conflict check.  Cast-offs at one berth do not block berthing
+        at a different mother (they are independent physical locations).  Approach
+        overlap is handled by BERTHING_DELAY_HOURS.  The previous cast-off loop
+        added up to 14 x 24h whenever ANY vessel was in CAST_OFF_B anywhere at
+        Point B, stacking all future berth calculations by weeks and freezing the
+        simulation completely.  That code is removed.
+        """
         wall_h = (current_hour + SIM_HOUR_OFFSET) % 24
-        if BERTHING_START <= wall_h < BERTHING_END and not self.is_any_vessel_casting_off(point):
+        if BERTHING_START <= wall_h < BERTHING_END:
             return current_hour
-        days = int(current_hour // 24)
-        # Sim-hour that corresponds to BERTHING_START wall-clock on this day
-        sim_bs_today = days * 24 + (BERTHING_START - SIM_HOUR_OFFSET)
+        days_elapsed = int(current_hour // 24)
+        sim_bs_today = days_elapsed * 24 + (BERTHING_START - SIM_HOUR_OFFSET)
         if current_hour <= sim_bs_today:
-            candidate = sim_bs_today
-        else:
-            candidate = sim_bs_today + 24
-        # Step forward one day at a time until cast-off conflict clears
-        for _ in range(14):
-            if not self.is_any_vessel_casting_off(point):
-                return candidate
-            candidate += 24
-        return candidate
+            return sim_bs_today
+        return sim_bs_today + 24
 
     def point_b_candidate_slots(self, v, at_time):
         """Build feasible Point B mother slots for vessel v at decision time.
 
         Priority rule:
-          - Primary mothers (Bryanston, Alkebulan, GreenEagle) are preferred when
-            they can berth within SANJULIAN_DELAY_THRESHOLD_HOURS of SanJulian.
-          - SanJulian is included as a candidate when she can berth the vessel
-            strictly earlier than the best available primary mother slot.  This means:
-              * If no primary is available at all → SanJulian is the only option.
-              * If primaries are delayed and SanJulian is free sooner → SanJulian
-                is offered.  select_point_b_mother then compares groups: a primary
-                delayed by ≤ SANJULIAN_DELAY_THRESHOLD_HOURS still wins; one delayed
-                beyond the threshold is demoted so SanJulian is chosen instead.
-          The delay-threshold mechanism ensures that when Alkebulan (or any primary)
-          is offline and the remaining primaries are fully occupied, daughters are
-          actively routed to SanJulian rather than queuing for many hours.
         """
         berthing_start = self.next_berthing_window(at_time, point="B")
-        sj_candidate = None
         primary_candidates = []
+        # Look-ahead: also include mothers returning from export within 24h so
+        # vessels waiting at BIA can reassign to an incoming mother.
+        _lookahead_t = at_time + 24.0
 
         for mother_name in MOTHER_NAMES:
-            if not self.mother_is_at_point_b(mother_name, at_time):
+            # Do NOT exclude export_ready primary mothers here.
+            # Operational rule: if the mother is physically at BIA and has capacity,
+            # she can receive the arriving vessel; this is especially important on
+            # startup day where the vessel closest to export volume (e.g. Bryanston)
+            # should be topped up rather than left idle. Export DOC/SAILING states
+            # are still blocked by mother_is_at_point_b/export_state checks below.
+            _at_bia_now  = self.mother_is_at_point_b(mother_name, at_time)
+            # Include mothers that will return from export within 24h
+            _at_bia_soon = (
+                not _at_bia_now
+                and self.mother_is_at_point_b(mother_name, _lookahead_t)
+            )
+            if not _at_bia_now and not _at_bia_soon:
                 continue
             _cap = self.mother_capacity_bbl(mother_name)
-            if self.mother_bbl[mother_name] + v.cargo_bbl > _cap:
+            # Projected-stock check: include all cargo already committed to this
+            # mother from vessels currently at berth (BERTHING_B / HOSE_CONNECT_B)
+            # or actively pumping (DISCHARGING).  This prevents over-scheduling
+            # (e.g. GreenEagle reaching 986k because 5 vessels were booked when
+            # she had headroom but stacked past cap on arrival).
+            #
+            # Only count vessels whose cargo actually fits within the mother's
+            # CURRENT headroom (cap − live stock).  A vessel assigned to this
+            # mother but carrying more than the available headroom will be turned
+            # away by MOTHER_CAPACITY_ABORT when it arrives — it is a phantom
+            # reservation that must not block a genuinely fitting vessel
+            # (e.g. SantaMonica 7k blocked by a pre-assigned RTH-001 44k when
+            # Bryanston has only 28k headroom: 44k can't fit so it shouldn't count).
+            _live_headroom = max(0.0, _cap - self.mother_bbl[mother_name])
+            _committed = sum(
+                vv.cargo_bbl for vv in self.vessels
+                if vv.assigned_mother == mother_name
+                and vv.status in {"BERTHING_B", "HOSE_CONNECT_B", "DISCHARGING"}
+                and vv is not v
+                and vv.cargo_bbl <= _live_headroom   # exclude oversized phantoms
+            )
+            if self.mother_bbl[mother_name] + _committed + v.cargo_bbl > _cap:
                 continue
-            earliest = max(berthing_start, self.mother_available_at[mother_name])
+            earliest = max(berthing_start, self.mother_available_at.get(mother_name, 0.0))
             berth_t = self.next_berthing_window(earliest, point="B")
             # Clamp berth_free_at to at_time — a past timestamp means "free now"
             _effective_free = max(self.mother_berth_free_at[mother_name], 0.0)
+            # Anchor to the live occupant's actual departure time
+            _occupant = self.mother_berth_current_occupant(mother_name)
+            _real_free = max(
+                _effective_free,
+                _occupant.next_event_time if _occupant is not None else 0.0,
+            )
             start = max(
                 berth_t,
-                _effective_free if _effective_free > at_time else 0.0,
-                self.mother_available_at[mother_name],
+                _real_free if _real_free > at_time else 0.0,
+                self.mother_available_at.get(mother_name, 0.0),
             )
             start = self.next_berthing_window(start, point="B")
-            entry = (start, berth_t, mother_name)
-            if mother_name == MOTHER_QUATERNARY_NAME:
-                sj_candidate = entry
-            else:
-                primary_candidates.append(entry)
+            primary_candidates.append((start, berth_t, mother_name))
 
-        # Determine the earliest a primary mother can berth this vessel
-        if primary_candidates:
-            earliest_primary_start = min(s for s, _, _ in primary_candidates)
-        else:
-            earliest_primary_start = None
-
-        # Include SanJulian only when she can berth no later than the best primary,
-        # i.e. when all primaries are delayed and SanJulian is free sooner.
-        # Also include her when no primary is available at all (last-resort fallback).
-        # PRESSURE OVERRIDE: when ≥ SANJULIAN_DYNAMIC_THRESHOLD_INBOUND daughters
-        # are already inbound/waiting, also offer SanJulian even if a primary could
-        # take the vessel — this distributes load and reduces queue time.
-        # Hard gate: SanJulian cannot receive a daughter while she is still
-        # berthed at a primary mother (BERTHING_B / HOSE_CONNECT_B / DISCHARGING
-        # / CAST_OFF_B). She must have fully cast off first.
-        sj_occupied = self.sanjulian_status in {
-            "BERTHING_B", "HOSE_CONNECT_B", "DISCHARGING", "CAST_OFF_B"
-        }
-        # Also block daughters during post-cast-off fender preparation
-        sj_fender_busy = at_time < self.sanjulian_fender_ready_t
         candidates = list(primary_candidates)
-        if sj_candidate is not None and not sj_occupied and not sj_fender_busy:
-            sj_start = sj_candidate[0]
-            _pressure_high = (self._daughters_inbound_to_bia()
-                              >= SANJULIAN_DYNAMIC_THRESHOLD_INBOUND)
-            if (earliest_primary_start is None
-                    or sj_start < earliest_primary_start - 1e-6
-                    or _pressure_high):
-                candidates.append(sj_candidate)
+
+        # Serial discharge gate — all mother vessels.
+        # Blocks a candidate mother only while its discharge lock is active
+        # (i.e. a vessel is currently pumping or in hose-connect).  Once the
+        # active vessel casts off, _point_b_deregister_mother() clears the lock
+        # and this filter passes immediately — allowing a second (or third)
+        # discharge to start on the same calendar day when operations complete
+        # early enough.  There is NO hard cap on discharges per day.
+        def _allowed(entry):
+            start, _, mn = entry
+            return not self._point_b_mother_assigned_on_day(mn, start)
+        candidates = [e for e in candidates if _allowed(e)]
 
         return berthing_start, candidates
 
     def mother_is_at_point_b(self, mother_name, t):
         """True when the mother is physically available at Point B.
-        SanJulian does not go on export voyages, but she CAN be marked
-        unavailable via a scheduled maintenance / dry-dock window.
+        Mothers can be marked unavailable via a scheduled maintenance /
+        dry-dock window.
         """
         # Startup seed: mother was seeded as away at export until a specific hour
         if t < self.mother_seeded_away_until.get(mother_name, 0.0):
             return False
-        # Mid-simulation scheduled unavailability windows (applies to all mothers,
-        # including SanJulian for dry-dock / maintenance periods)
+        # Mid-simulation scheduled unavailability windows (dry-dock / maintenance)
         for _start_h, _end_h in self.mother_unavailability_windows.get(mother_name, []):
             if _start_h <= t < _end_h:
                 return False
-        if mother_name == MOTHER_QUATERNARY_NAME:
-            # SanJulian has no export state machine — just return True once
-            # any scheduled unavailability window has been checked above.
-            return True
-        if t < self.mother_available_at.get(mother_name, 0.0):
+        # Mother is unavailable whenever mother_available_at is still in the future.
+        # This covers every phase of the export round-trip:
+        #   DOC      — documenting at BIA, about to depart
+        #   SAILING  — outbound transit to export terminal
+        #   HOSE     — connecting hoses at export terminal
+        #   IN_PORT  — pumping cargo at export terminal
+        #   (None)   — export complete, sailing back to BIA (return transit)
+        #   (None)   — arrived at BIA, fendering in progress
+        # In all of these phases the mother is NOT physically at Point B and must
+        # not appear as a valid berth candidate for arriving daughter vessels.
+        # The 24-hour lookahead in point_b_candidate_slots (_at_bia_soon) calls
+        # this function at t+24h, so daughters can still be pre-assigned when the
+        # return is imminent — but actual berthing is gated by mother_berth_free_at
+        # (set to return_arrival + FENDERING_HOURS) and the BERTHING_B handler,
+        # which reverts to WAITING_MOTHER_RETURN if the mother is still absent.
+        _available_at = self.mother_available_at.get(mother_name, 0.0)
+        if t < _available_at:
             return False
-        return self.export_state.get(mother_name) not in {"SAILING", "HOSE", "IN_PORT"}
+        # Mother is at Point B and fendering is complete
+        return True
+
+    def mother_berth_current_occupant(self, mother_name):
+        """Return the vessel currently occupying this mother's berth, or None if free.
+
+        A berth is occupied while a vessel is in any active berth state.
+        Returns a (vessel_or_sentinel, volume) tuple internally — use
+        mother_berth_active_actors for the full list; this method returns the
+        first regular-vessel occupant for backward-compatibility with callers that
+        just need to know if the berth is free.
+        """
+        active_berth_statuses = {"BERTHING_B", "HOSE_CONNECT_B", "DISCHARGING", "CAST_OFF_B"}
+        for vv in self.vessels:
+            if vv.assigned_mother == mother_name and vv.status in active_berth_statuses:
+                return vv
+        return None
+
+    def mother_berth_active_actors(self, mother_name):
+        """Return a list of (name, cargo_bbl, status) for every actor currently
+        berthed at mother_name.
+
+        Used by the concurrent-occupancy guard at BERTHING_B → HOSE_CONNECT_B.
+        """
+        active_berth_statuses = {"BERTHING_B", "HOSE_CONNECT_B", "DISCHARGING", "CAST_OFF_B"}
+        actors = []
+        for vv in self.vessels:
+            if vv.assigned_mother == mother_name and vv.status in active_berth_statuses:
+                actors.append((vv.name, vv.cargo_bbl, vv.status, "vessel", vv))
+        return actors
+
+    def _concurrent_berth_guard(self, arriving_vessel_name, arriving_cargo_bbl,
+                                 mother_name, t):
+        """Check for concurrent occupancy at mother_name just before hose opens.
+
+        Called at the BERTHING_B → HOSE_CONNECT_B transition for every actor
+        (regular daughters and MTO transients).
+
+        If more than one actor is berthed simultaneously the actor with the
+        smaller cargo is aborted back to WAITING_BERTH_B.  Returns True when the
+        arriving actor is the loser and should abort; False when it may proceed.
+
+        Rules:
+        • Volume decides: larger cargo stays, smaller cargo aborts.
+        • Tie: the actor that arrived first (lower next_event_time) stays.
+        • An actor in DISCHARGING or CAST_OFF_B is never aborted — it has
+          already started pumping and interrupting would corrupt mother stock.
+        """
+        actors = self.mother_berth_active_actors(mother_name)
+        # ── Physical enforcement: a mother away at export (or sailing back /
+        # fendering) is NOT at Point B, and no daughter has
+        # permission to sail to the export terminal.  Therefore no actor may berth
+        # or open hoses to a mother in any export-busy state — it is physically
+        # impossible.  This single chokepoint (hit by every actor at the
+        # BERTHING_B → HOSE_CONNECT_B transition) guarantees the rule regardless of
+        # which assignment path placed the actor here.  The actor aborts back to
+        # WAITING_BERTH_B and re-tries once the mother has fully arrived at BIA and
+        # completed fendering (export_state clears to None).
+        if self.export_state.get(mother_name) in EXPORT_BUSY_STATES:
+            self.log_event(
+                t, arriving_vessel_name, "CONCURRENT_BERTH_ABORT",
+                f"Cannot berth {mother_name}: mother is away on export duty "
+                f"({self.export_state.get(mother_name)}) — no permission to sail to "
+                f"the export terminal; {arriving_vessel_name} held until she returns "
+                f"to BIA and completes fendering",
+                mother=mother_name,
+            )
+            return True   # arriving actor must abort — mother not physically present
+        # Only pre-pump actors can be displaced (BERTHING_B or HOSE_CONNECT_B)
+        abortable_statuses = {"BERTHING_B", "HOSE_CONNECT_B"}
+        active_discharging = [a for a in actors
+                              if a[2] not in abortable_statuses]   # already pumping
+        if active_discharging:
+            # Someone is already pumping — arriving actor must abort unconditionally
+            active_names = [a[0] for a in active_discharging]
+            self.log_event(
+                t, arriving_vessel_name, "CONCURRENT_BERTH_ABORT",
+                f"Concurrent berth guard: {mother_name} occupied by "
+                f"{', '.join(active_names)} (DISCHARGING/CAST_OFF_B) — "
+                f"{arriving_vessel_name} aborted to WAITING_BERTH_B",
+                mother=mother_name,
+            )
+            return True   # arriving actor loses — abort
+
+        pre_pump = [a for a in actors if a[2] in abortable_statuses]
+        if len(pre_pump) <= 1:
+            return False  # no conflict — only us (or nobody)
+
+        # Multiple actors in pre-pump state — sort by volume desc, then by
+        # next_event_time asc (earlier arrival wins ties)
+        def _sort_key(actor):
+            vol = actor[1]
+            # Use next_event_time from vessel object if available, else 0
+            arrival = actor[4].next_event_time if actor[4] is not None else 0.0
+            return (-vol, arrival)
+
+        pre_pump_sorted = sorted(pre_pump, key=_sort_key)
+        winner_name = pre_pump_sorted[0][0]
+
+        if winner_name != arriving_vessel_name:
+            # We are not the winner — abort ourselves
+            loser_names  = [a[0] for a in pre_pump_sorted[1:]]
+            self.log_event(
+                t, arriving_vessel_name, "CONCURRENT_BERTH_ABORT",
+                f"Concurrent berth guard: {mother_name} — "
+                f"{winner_name} wins ({pre_pump_sorted[0][1]:,.0f} bbl); "
+                f"{arriving_vessel_name} ({arriving_cargo_bbl:,.0f} bbl) aborted to WAITING_BERTH_B",
+                mother=mother_name,
+            )
+            return True
+
+        # We are the winner — abort the other pre-pump losers
+        for actor in pre_pump_sorted[1:]:
+            loser_name, loser_vol, loser_status, loser_type, loser_obj = actor
+            if loser_type == "vessel" and loser_obj is not None:
+                loser_obj.status          = "WAITING_BERTH_B"
+                loser_obj.assigned_mother = None
+                loser_obj.next_event_time = self.next_daylight_hourly_berth_check(
+                    t, point="B")
+                self.log_event(
+                    t, loser_name, "CONCURRENT_BERTH_ABORT",
+                    f"Concurrent berth guard: {mother_name} — "
+                    f"{arriving_vessel_name} wins ({arriving_cargo_bbl:,.0f} bbl); "
+                    f"{loser_name} ({loser_vol:,.0f} bbl) aborted to WAITING_BERTH_B",
+                    mother=mother_name,
+                )
+        return False   # arriving actor is the winner — proceed
+
+    def point_b_calendar_day_key(self, t: float) -> int:
+        """Return the calendar day key for Point B operations.
+
+        The simulation anchor is 08:00 at t=0, so we align days using
+        SIM_HOUR_OFFSET to make day boundaries run 08:00–07:59.
+        """
+        return int((t + SIM_HOUR_OFFSET) // 24)
+
+    def _point_b_register_mother_start(self, mother_name: str, start_t: float) -> None:
+        """Lock this mother's berth at pump-start.
+
+        Implements the SERIAL DISCHARGE rule: only one pumping operation may be
+        active per mother at any time.  The lock is released at cast-off
+        completion via _point_b_deregister_mother(), at which point a second
+        vessel may berth and pump on the same calendar day.
+
+        Covers Bryanston and GreenEagle equally.
+        Using a set guarantees exactly one active lock per mother — there is no
+        cap on how many times per day the lock can cycle (lock → release → lock
+        → release), enabling two or more serial discharges per day when
+        operations complete early enough.
+        """
+        if mother_name not in {MOTHER_PRIMARY_NAME, MOTHER_SECONDARY_NAME}:
+            return
+        day_key = self.point_b_calendar_day_key(start_t)
+        self.point_b_day_assigned_mothers.setdefault(day_key, set()).add(mother_name)
+        # Remember which day the slot was locked so deregister can target the
+        # correct key even when cast-off is deferred past midnight (overnight
+        # daylight restriction).  Without this, a late-evening discharge whose
+        # cast-off falls on day N+1 would deregister from day N+1 and leave
+        # the day-N slot permanently locked, blocking all subsequent vessels.
+        self._point_b_registered_day[mother_name] = day_key
+
+    def _point_b_deregister_mother(self, mother_name: str, t: float) -> None:
+        """Release the serial-discharge lock after a vessel has fully cast off.
+
+        Called at CAST_OFF_COMPLETE_B (daughters).  Once released, the berth
+        is free for the next eligible
+        vessel regardless of calendar day — enabling two or more serial
+        discharges per day.
+
+        Uses the stored pump-start day key (not cast-off time) so that discharges
+        completing after midnight correctly clear the day-N slot rather than the
+        day-(N+1) slot.
+
+        Covers Bryanston and GreenEagle equally.
+        """
+        if mother_name not in {MOTHER_PRIMARY_NAME, MOTHER_SECONDARY_NAME}:
+            return
+        # Prefer the recorded pump-start day; fall back to cast-off day only
+        # when no registration exists (e.g. seeded vessels at t=0).
+        day_key = self._point_b_registered_day.pop(mother_name, None)
+        if day_key is None:
+            day_key = self.point_b_calendar_day_key(t)
+        day_set = self.point_b_day_assigned_mothers.get(day_key)
+        if day_set:
+            day_set.discard(mother_name)
+
+    def _point_b_mother_assigned_on_day(self, mother_name: str, start_t: float) -> bool:
+        """Return True when this mother's serial-discharge lock is currently active.
+
+        The lock is set at pump-start and released at cast-off — so this returns
+        False as soon as the current vessel casts off, allowing a second (or
+        third) discharge to start on the same calendar day.
+
+        Covers Bryanston and GreenEagle.
+        """
+        if mother_name not in {MOTHER_PRIMARY_NAME, MOTHER_SECONDARY_NAME}:
+            return False
+        day_key = self.point_b_calendar_day_key(start_t)
+        return mother_name in self.point_b_day_assigned_mothers.get(day_key, set())
 
     def mother_export_departure_eligible(self, mother_name):
         """Export may depart when the trigger is reached, unless daughter traffic
@@ -1957,17 +2561,28 @@ class Simulation:
 
         # Rule 2 — safety valve: if export_ready has been set for too long, sail
         # regardless of daughter traffic (prevents indefinite deferral).
+        # Use 0.5× buffer (24h) so a full day's daughter traffic never permanently
+        # blocks a departure — the mother must export within 24h of reaching trigger.
         ready_since = self.export_ready_since.get(mother_name)
         if ready_since is not None:
             time_ready = getattr(self, '_current_t', 0) - ready_since
-            if time_ready >= EXPORT_SERIES_BUFFER_HOURS * 0.75:
+            if time_ready >= EXPORT_SERIES_BUFFER_HOURS * 0.5:
                 return True
 
         # Rule 3 — daughter look-ahead deferral
         # If ≥ EXPORT_DEFER_INBOUND_THRESHOLD daughters are inbound/at BIA AND
         # this mother can still absorb at least one more daughter cargo, defer
         # departure so she loads up further before sailing.
-        _n_inbound = self._daughters_inbound_to_bia()
+        # Exclude established MTO transient receivers: they are stuck at BIA
+        # waiting for a primary berth (not delivering to this mother), and
+        # counting them inflates the pressure and blocks export indefinitely.
+        _raw_inbound = self._daughters_inbound_to_bia()
+        _mto_stuck = sum(
+            1 for vv in self.vessels
+            if getattr(vv, "_mto_transient_since_day", None) is not None
+            and vv.status in {"WAITING_BERTH_B", "WAITING_MOTHER_CAPACITY"}
+        )
+        _n_inbound = max(0, _raw_inbound - _mto_stuck)
         if (_n_inbound >= EXPORT_DEFER_INBOUND_THRESHOLD
                 and remaining_capacity >= MIN_INCOMING_TRANSFER_BBL):
             return False
@@ -1975,294 +2590,761 @@ class Simulation:
         # Rule 4 — normal departure: trigger reached, daughter pressure is low
         return True
 
-    # ── SanJulian transload machinery ─────────────────────────────────────────
+    def _mto_transient_can_discharge_today(self, vessel, t):
+        """Return True if the MTO transient vessel can berth a primary mother
+        before the end of today's daylight window.
 
-    def _sj_primary_mothers(self):
-        """Return list of primary mother names (everything except SanJulian)."""
-        return [n for n in MOTHER_NAMES if n != MOTHER_QUATERNARY_NAME]
+        MTO transients have ABSOLUTE priority at BIA — they displace normal
+        daughters via _displace_incumbent_at_mother. Therefore the berth-free
+        timestamp is irrelevant: the transient will claim the berth regardless
+        of any non-transient reservation. We only check physical availability
+        (mother at BIA, not mid-export, has any positive space).
 
-    def _sj_best_transload_target(self, t):
-        """Choose the best primary mother to receive a SanJulian transload.
-
-        Priority:
-          1. Mother closest to its export trigger with the most headroom.
-          2. Mother that is idle at Point B with no daughter arriving today.
-          3. Any mother with the most space.
-        Returns (mother_name, amount_to_transfer) or (None, 0).
+        This prevents the bug where an arriving daughter pre-reserves a berth
+        and the transient sees berth_free_at > daylight_end, concludes no berth
+        is available, and MTO keeps topping it up indefinitely.
         """
-        sj_vol = self.mother_bbl[MOTHER_QUATERNARY_NAME]
-        if sj_vol <= 0:
-            return None, 0
-
-        day_key = int(t // 24)
-        # Vessels arriving at BIA today (en-route or fairway) targeting each mother
-        arriving_today = set()
-        for vv in self.vessels:
-            if vv.assigned_mother and vv.status in {
-                "SAILING_AB_LEG2", "WAITING_FAIRWAY", "SAILING_BW_TO_FWY",
-                "BERTHING_B", "HOSE_CONNECT_B", "DISCHARGING",
-            }:
-                arriving_today.add(vv.assigned_mother)
-
-        candidates = []
-        for mn in self._sj_primary_mothers():
-            if not self.mother_is_at_point_b(mn, t):
-                continue          # skip mothers physically away at export
-            # For T1 (capacity force-drain) skip only DOC state — mother about
-            # to sail in hours.  export_ready mothers are still at BIA and can
-            # accept cargo; those barrels will ship on the next export voyage.
-            if self.export_state.get(mn) == "DOC":
+        for _mn in MOTHER_NAMES:
+            if not self.mother_is_at_point_b(_mn, t):
                 continue
-            space = self.mother_capacity_bbl(mn) - self.mother_bbl[mn]
-            if space <= 0:
+            # Block all export states: a mother in DOC/SAILING is leaving, and
+            # one in HOSE/IN_PORT is physically at the export terminal — neither
+            # can receive an MTO transient discharge.
+            if self.export_state.get(_mn) in EXPORT_BUSY_STATES:
                 continue
-            amount = min(sj_vol, space)
-            if amount <= 0:
+            if self.mother_capacity_bbl(_mn) - self.mother_bbl.get(_mn, 0) <= 0:
                 continue
-            # Score: prefer mothers near export trigger with free space
-            to_trigger = max(0.0, self.mother_export_trigger_bbl(mn) - self.mother_bbl[mn])
-            idle_no_arrival = (mn not in arriving_today and
-                               not any(vv.assigned_mother == mn and
-                                       vv.status in {"BERTHING_B","HOSE_CONNECT_B","DISCHARGING"}
-                                       for vv in self.vessels))
-            candidates.append({
-                "mother": mn, "amount": amount, "space": space,
-                "to_trigger": to_trigger, "idle_no_arrival": idle_no_arrival,
-            })
+            # Mother is physically present and has space — MTO transient WILL
+            # claim this berth (displacing any normal daughter). Return True.
+            return True
+        return False
 
-        if not candidates:
-            return None, 0
+    def _enforce_exclusive_day_at_mother(
+        self, mother_name: str, t: float, physical_end: float
+    ) -> None:
+        """Enforce the exclusive-day berthing rule for an MTO discharge.
 
-        # Sort: idle-with-no-arrival first, then by how close to export trigger,
-        # then by how much space is available
-        candidates.sort(key=lambda c: (
-            0 if c["idle_no_arrival"] else 1,
-            c["to_trigger"],
-            -c["space"],
-        ))
-        best = candidates[0]
-        return best["mother"], best["amount"]
+        When an MTO transient starts discharging to mother_name at time t:
+          1. Lock mother_berth_free_at[mother_name] until the LATER of
+             (a) physical_end  — when pumping + cast-off physically completes
+             (b) _next_day_berth_start(t) — 08:00 of the NEXT calendar day
+             → No other vessel may berth this mother for the rest of today.
+          2. Displace any vessel currently in BERTHING_B or HOSE_CONNECT_B
+             at this mother back to WAITING_BERTH_B.
+             Vessels actively pumping (DISCHARGING) are never interrupted.
+
+        Called from three places:
+          • MTO transient HOSE_CONNECT_B → DISCHARGING
+        """
+        _lock_until = max(physical_end, self._next_day_berth_start(t))
+        # (a) Set the exclusive-day berth lock
+        self.mother_berth_free_at[mother_name] = max(
+            self.mother_berth_free_at.get(mother_name, 0.0),
+            _lock_until,
+        )
+        # (b) Displace any pre-pump incumbents — they can re-berth from tomorrow
+        for _vv in self.vessels:
+            if _vv.assigned_mother != mother_name:
+                continue
+            if _vv.status not in {"BERTHING_B", "HOSE_CONNECT_B"}:
+                continue
+            # Pre-pump state — safe to displace without interrupting any operation
+            _vv.status = "WAITING_BERTH_B"
+            _vv.assigned_mother = None
+            _vv.next_event_time = self.next_daylight_hourly_berth_check(
+                t, point="B")
+            self.log_event(
+                t, _vv.name, "WAITING_BERTH_B",
+                f"Displaced from {mother_name}: exclusive-day lock active — "
+                f"MTO transient discharging until "
+                f"{self.hours_to_dt(_lock_until).strftime('%Y-%m-%d %H:%M')}. "
+                f"Re-assessing at "
+                f"{self.hours_to_dt(_vv.next_event_time).strftime('%Y-%m-%d %H:%M')}.",
+                voyage_num=_vv.current_voyage, mother=mother_name,
+            )
+
+    def _next_day_berth_start(self, t: float) -> float:
+        """Sim-hour at which the NEXT operating day begins (08:00 wall clock).
+
+        When an MTO transient starts discharging at time t, the target
+        mother's berth is exclusive for the rest of that calendar day.
+        Lock until max(physical_completion, this value).
+
+        Example: t=9 (17:00 Day1) → returns 16 (08:00 Day2).
+        """
+        return (int((t + SIM_HOUR_OFFSET) // 24) + 1) * 24 - SIM_HOUR_OFFSET
 
     def _daughters_inbound_to_bia(self):
-        """Count daughter vessels currently at BIA or inbound within the next
-        EXPORT_LOOKFORWARD_HOURS hours (waiting, sailing final legs, or berthing).
-        Used for SanJulian dynamic threshold and export departure look-ahead.
+        """Count daughter vessels currently arriving at or actively at BIA.
+
+        Only counts vessels physically converging on BIA or discharging there.
+        Excludes vessels that have FINISHED at BIA and are departing (CAST_OFF_B,
+        WAITING_RETURN_STOCK) — those were inflating the count and falsely
+        triggering export deferral Rule 3 indefinitely.
+
+        Used for export departure look-ahead.
         """
         _at_or_inbound = {
+            # Inbound — sailing toward BIA
             "SAILING_AB_LEG2", "WAITING_FAIRWAY", "SAILING_BW_TO_FWY",
             "SAILING_CROSS_BW_AC", "SAILING_AB",
+            # At BIA — waiting, berthing, or actively discharging
             "WAITING_BERTH_B", "BERTHING_B", "HOSE_CONNECT_B",
-            "DISCHARGING", "CAST_OFF_B", "WAITING_CAST_OFF",
+            "DISCHARGING", "WAITING_CAST_OFF",
             "WAITING_MOTHER_CAPACITY", "WAITING_MOTHER_RETURN",
-            "WAITING_RETURN_STOCK",
+            # NOTE: "CAST_OFF_B" and "WAITING_RETURN_STOCK" are EXCLUDED —
+            # those vessels completed discharge and are leaving BIA.
+            # Counting them inflated pressure and blocked export departures.
         }
         return sum(1 for vv in self.vessels if vv.status in _at_or_inbound)
 
-    def _sj_transload_trigger_check(self, t):
-        """Return (trigger_reason_str, target_mother, amount) if a transload should
-        start, otherwise return (None, None, 0).
+    def _maybe_run_multiple_transient_op(self, t):
+        """Fire at 08:00 AND at the first tick >=12:00 each day.
 
-        Priority rules:
-          T1  SanJulian at ≥90% capacity — force drain immediately
-          T2  SanJulian holds enough to complete a primary mother's export gap
-          T3  A primary mother is idle (no daughter active or arriving) AND
-              SanJulian holds any volume — trigger regardless of stock size.
-              This fires even if SanJulian only holds a small amount.
-          T4  Optimisation: SanJulian above 25% and a mother has ≥50k free space
+        Normal mode (export available):
+          Single-pair MTO — one transient accumulates parcels until a mother
+          berth opens.  Parcel limit = MTO_MAX_PARCELS_BEFORE_OFFLOAD (1) or
+          MTO_MAX_PARCELS_ESCALATED (3) when both primaries are down.
 
-        Hard gate: SanJulian cannot start a transload while any daughter vessel
-        is still berthing, connecting, discharging, or casting off at SanJulian.
-        She must wait until her own berth is fully clear first.
+        Aggressive mode (export_unavailability window active):
+          Multi-pair MTO — every idle large vessel becomes a receiver; every
+          idle small vessel discharges to the nearest available receiver.
+          Watson can load from Woodstock while Sherlock loads from Bagshot
+          simultaneously.  SantaMonica discharges to any receiver.
+          No per-day fire limit — the function forms as many pairs as the
+          waiters allow on each tick.
+          Each receiver fills to its full MTO_TRANSIENT_CAPACITY_BBL, only
+          offloading to a mother once a berth genuinely opens.
         """
-        sj_vol = self.mother_bbl[MOTHER_QUATERNARY_NAME]
-        sj_cap = SANJULIAN_CAPACITY_BBL
+        if not MULTIPLE_TRANSIENT_OPERATION:
+            return
 
-        # Never transload if SanJulian is empty
-        if sj_vol <= 0:
-            return None, None, 0
-
-        # Never start a new cycle while one is active
-        if self.sanjulian_status is not None:
-            return None, None, 0
-
-        # Never start a new cycle during post-cast-off fender preparation
-        if t < self.sanjulian_fender_ready_t:
-            return None, None, 0
-
-        # ── Hard gate: wait until no daughter is berthing/discharging to SanJulian ──
-        daughter_on_sanjulian = any(
-            vv.assigned_mother == MOTHER_QUATERNARY_NAME and
-            vv.status in {"BERTHING_B", "HOSE_CONNECT_B", "DISCHARGING", "CAST_OFF_B"}
-            for vv in self.vessels
-        )
-        if daughter_on_sanjulian:
-            return None, None, 0
-
-        # ── Dynamic daughter-threshold escalation ────────────────────────────
-        # When ≥ SANJULIAN_DYNAMIC_THRESHOLD_INBOUND daughters are inbound or
-        # waiting at BIA, raise the minimum-load threshold by 1 per additional
-        # daughter beyond the base (capped at sanjulian_daughters_min_threshold + 3)
-        # so SanJulian accumulates more cargo before draining.  This reduces the
-        # frequency of SJ→primary transload cycles during high-traffic periods,
-        # keeping primary mother berths free for daughter discharges.
-        # The threshold is NEVER reduced below the hard 2-daughter minimum.
-        _n_inbound = self._daughters_inbound_to_bia()
-        _dyn_extra = max(0, _n_inbound - SANJULIAN_DYNAMIC_THRESHOLD_INBOUND)
-        _dyn_extra = min(_dyn_extra, 3)   # cap escalation at +3
-        _effective_min_threshold = self.sanjulian_daughters_min_threshold + _dyn_extra
-
-        _min_daughters_met = (
-            self.sanjulian_daughters_loaded >= _effective_min_threshold
+        # ── Is export blocked right now? ─────────────────────────────────────
+        _export_unavail_now = any(
+            _eu_s <= t < _eu_e
+            for (_eu_s, _eu_e) in getattr(self, 'export_unavailability_windows', [])
         )
 
-        # T1 — SanJulian at ≥75% capacity: force drain immediately (no gate).
-        # Threshold lowered from 90% to 75% so she drains before accumulating
-        # too much volume — 90% was too late given cycle times.
-        # Also force-drain whenever T2/T3/T4 gates cannot be met AND SJ is
-        # above 50% AND a primary mother has meaningful free space — this
-        # prevents SJ from silently holding volume when daughters keep arriving.
-        if sj_vol >= sj_cap * 0.75:
-            target, amount = self._sj_best_transload_target(t)
-            if target:
-                return "T1-NEAR_CAPACITY", target, amount
+        # ── Gate 1: time-of-day window ────────────────────────────────────────
+        # Scan every half-hour tick during daylight (DAYLIGHT_START–20:00).
+        # The per-day fire cap prevents runaway pairing while the hard-waiter
+        # check below ensures MTO only fires on confirmed idle BIA vessels.
+        wall_hour = (t + SIM_HOUR_OFFSET) % 24
+        day_key   = int((t + SIM_HOUR_OFFSET) // 24)
+        _in_daylight = DAYLIGHT_START <= wall_hour < 20.0
+        if not _in_daylight:
+            return
 
-        # T1b — SanJulian holding ≥50% but gate not yet met AND daughters still
-        # inbound: if a primary mother has ≥ one daughter cargo of free space,
-        # drain now so SJ remains available as a buffer for new arrivals.
-        if sj_vol >= sj_cap * 0.50 and not _min_daughters_met:
-            for mn in self._sj_primary_mothers():
-                if not self.mother_is_at_point_b(mn, t):
-                    continue
-                if self.export_state.get(mn) == "DOC":
-                    continue
-                space = self.mother_capacity_bbl(mn) - self.mother_bbl[mn]
-                if space >= MIN_INCOMING_TRANSFER_BBL:
-                    amount = min(sj_vol, space)
-                    return "T1b-HALF_CAPACITY_DRAIN", mn, amount
+        # ── Gate 2: vessels stranded or converging on BIA ───────────────────
+        # Primary condition: ≥2 waiters AND ≥1 hard-waiter (physically stopped).
+        # Supplemental condition: ≥2 total waiters AND more vessels converging
+        #   than available primary berth slots — fires preemptively so MTO pairs
+        #   form before the excess vessels physically stop at BIA.
+        # Example: Laphroaig + Rahama + Rathbone all SAILING_AB_LEG2 (no hard
+        #   waiter), but only 1 primary mother berth is free today — the 2nd and
+        #   3rd vessels will be stranded; MTO fires now so Laphroaig can absorb
+        #   Rahama's cargo while still inbound rather than waiting at BIA idle.
+        _hard_wait = {"WAITING_BERTH_B", "WAITING_MOTHER_CAPACITY"}
+        _soft_wait = {"WAITING_FAIRWAY", "SAILING_AB_LEG2"}
+        _all_wait  = _hard_wait | _soft_wait
+        waiters = [vv for vv in self.vessels
+                   if vv.status in _all_wait and vv.cargo_bbl > 0]
+        if len(waiters) < 2:
+            return
+        _hard_waiters = [vv for vv in waiters if vv.status in _hard_wait]
 
-        # T2/T3/T4/T5 require minimum daughters discharged (dynamic threshold)
-        if not _min_daughters_met:
-            return None, None, 0
+        if len(_hard_waiters) < 1:
+            # No hard-waiter yet — check convergence: count free primary berths.
+            # If fewer berths are available than vessels converging, MTO should
+            # fire preemptively for the overflow vessels.
+            _free_primary_slots = sum(
+                1 for mn in MOTHER_NAMES
+                if self.mother_is_at_point_b(mn, t)
+                and self.mother_capacity_bbl(mn) - self.mother_bbl.get(mn, 0) > 0
+                and self.mother_berth_free_at.get(mn, 0.0) <= t + 1e-6
+                and self.export_state.get(mn) not in EXPORT_BUSY_STATES
+            )
+            _converging_vessels = len(waiters)   # all inbound + at-BIA vessels
+            if _converging_vessels <= _free_primary_slots:
+                # Enough berths for everyone — no MTO needed yet
+                return
+            # More vessels than berths: fall through to fire MTO
+            # Promote soft-waiters to satisfy the rest of the MTO logic
+        # (If _hard_waiters >= 1, fall through normally)
 
-        # ── Eligibility helpers ───────────────────────────────────────────────
-        # Strict: used by T2/T3 — skips mothers flagged export_ready or DOC
-        # (don't top up a mother that is committed to sailing imminently)
-        def _sj_eligible_strict(mn):
+        # Per-day fire cap — normal mode 12 pairs/day max (1/hr × 12 h window);
+        # unlimited in export-unavailability (aggressive) mode.
+        if not _export_unavail_now:
+            _bryanston_ok = (self.mother_is_at_point_b(MOTHER_PRIMARY_NAME, t)
+                             and self.mother_capacity_bbl(MOTHER_PRIMARY_NAME)
+                                 - self.mother_bbl.get(MOTHER_PRIMARY_NAME, 0) > 0)
+            _greeneagle_ok = (self.mother_is_at_point_b(MOTHER_SECONDARY_NAME, t)
+                              and self.mother_capacity_bbl(MOTHER_SECONDARY_NAME)
+                                  - self.mother_bbl.get(MOTHER_SECONDARY_NAME, 0) > 0)
+            _primaries_both_down_early = not _bryanston_ok and not _greeneagle_ok
+            _max_fires = 24 if _primaries_both_down_early else 12
+            _day_fires = self._mto_days_fired.get(day_key, 0)
+            if _day_fires >= _max_fires:
+                return
+
+        # ── Gate 3: enough mother berths to serve ALL waiting vessels today ────
+        # OLD logic: if ANY mother has space + free berth → suppress MTO.
+        # NEW logic: count available berth-slots; suppress MTO only when
+        #   slots ≥ vessel count (every vessel can discharge directly).
+        # When vessels > slots, MTO fires so excess vessels are not stranded.
+        # Example: 3 vessels, 1 free berth → 2 will be idle → MTO fires.
+        _min_cargo = min(vv.cargo_bbl for vv in waiters)
+        _daylight_end_t = (int((t + SIM_HOUR_OFFSET) // 24) * 24
+                           + DAYLIGHT_END - SIM_HOUR_OFFSET)
+
+        # Count mothers with (a) space ≥ smallest cargo AND (b) berth free today
+        _available_slots = 0
+        for mn in MOTHER_NAMES:
             if not self.mother_is_at_point_b(mn, t):
-                return False   # away at export or seeded as away
-            if self.export_state.get(mn) == "DOC":
-                return False   # export documentation in progress — about to sail
-            if self.export_ready.get(mn):
-                return False   # hit export trigger — departure imminent
-            return True
+                continue
+            if self.mother_capacity_bbl(mn) - self.mother_bbl.get(mn, 0) < _min_cargo:
+                continue
+            berth_free_at = self.mother_berth_free_at.get(mn, 0.0)
+            if berth_free_at <= _daylight_end_t:
+                _available_slots += 1
 
-        # Relaxed: used by T4/T5 — accepts export_ready mothers.
-        # A mother with export_ready=True is STILL physically at BIA and can
-        # receive more cargo before she departs; those barrels ship on the
-        # next export voyage.  Blocking T4/T5 on export_ready was the primary
-        # cause of SanJulian holding volume for many days (all primaries cycling
-        # through export_ready simultaneously leaves no eligible target).
-        def _sj_eligible_relaxed(mn):
-            if not self.mother_is_at_point_b(mn, t):
-                return False   # physically away — cannot receive
-            if self.export_state.get(mn) == "DOC":
-                return False   # export docs started — sailing imminent (hours)
-            return True
+        # Suppress MTO only when every waiting vessel has a direct berth today.
+        # If vessels > slots, MTO fires for the overflow — those vessels would
+        # otherwise be stranded idle until a berth opens the following day.
+        if _available_slots >= len(waiters) and _available_slots > 0:
+            return
 
-        # T2 — SanJulian holds enough to complete a primary mother's export gap
-        for mn in self._sj_primary_mothers():
-            if not _sj_eligible_strict(mn):
-                continue
-            space = self.mother_capacity_bbl(mn) - self.mother_bbl[mn]
-            if space <= 0:
-                continue
-            export_gap = max(0.0, MOTHER_EXPORT_VOLUME - self.mother_bbl[mn])
-            if export_gap > 0 and sj_vol >= export_gap:
-                amount = min(sj_vol, export_gap, space)
-                if amount > 0:
-                    return "T2-EXPORT_COMPLETION", mn, amount
+        # ── Escalation flags ──────────────────────────────────────────────────
+        _bryanston_available = (
+            self.mother_is_at_point_b(MOTHER_PRIMARY_NAME, t)
+            and (self.mother_capacity_bbl(MOTHER_PRIMARY_NAME)
+                 - self.mother_bbl[MOTHER_PRIMARY_NAME]) >= _min_cargo
+        )
+        _greeneagle_available = (
+            self.mother_is_at_point_b(MOTHER_SECONDARY_NAME, t)
+            and (self.mother_capacity_bbl(MOTHER_SECONDARY_NAME)
+                 - self.mother_bbl[MOTHER_SECONDARY_NAME]) >= _min_cargo
+        )
+        _both_primaries_down = not _bryanston_available and not _greeneagle_available
+        _escalate_mto = _both_primaries_down or _export_unavail_now
 
-        # T3 — A primary mother is idle with no daughter active or en-route to it.
-        #       SanJulian transloads regardless of stock volume (even small amounts).
-        for mn in self._sj_primary_mothers():
-            if not _sj_eligible_strict(mn):
-                continue
-            space = self.mother_capacity_bbl(mn) - self.mother_bbl[mn]
-            if space <= 0:
-                continue
-            # Mother is idle: no daughter currently berthing/discharging
-            daughter_active = any(
-                vv.assigned_mother == mn and
-                vv.status in {"BERTHING_B", "HOSE_CONNECT_B", "DISCHARGING"}
+        # ── Dynamic parcel limit ──────────────────────────────────────────────
+        # Instead of a fixed global constant, derive how many top-ups the current
+        # MTO receiver should accept from real-time operational demand:
+        #
+        #  tomorrow_congestion  = # vessels arriving at BIA tomorrow with cargo
+        #                         that have no primary berth yet.  When ≥2,
+        #                         congestion is expected to persist — the receiver
+        #                         should keep absorbing parcels.  When 0 or 1,
+        #                         congestion clears — the receiver should offload
+        #                         immediately after the first parcel.
+        #
+        #  headroom_parcels     = how many more full-shuttle cargoes the receiver
+        #                         can still hold before hitting its MTO ceiling.
+        #                         Used to prevent the limit exceeding physical cap.
+        #
+        # Result:
+        #  • No tomorrow congestion → limit = 1  (discharge as soon as possible)
+        #  • Tomorrow congestion, headroom available → limit = min(headroom_parcels,
+        #                                               tomorrow_congestion,
+        #                                               MTO_MAX_PARCELS_ESCALATED)
+        #  • Both primaries down / export window → escalated limit (as before) but
+        #                                          also capped by headroom_parcels.
+        #
+        _tomorrow_t = t + 24.0          # one day ahead
+        _tomorrow_day = day_key + 1
+        # Vessels that will be waiting/arriving tomorrow: SAILING_AB_LEG2 or
+        # WAITING_BERTH_B / WAITING_MOTHER_CAPACITY with cargo, not yet assigned.
+        _tomorrow_waiters = [
+            vv for vv in self.vessels
+            if vv.cargo_bbl > 0
+            and vv.status in {
+                "SAILING_AB_LEG2", "WAITING_BERTH_B",
+                "WAITING_MOTHER_CAPACITY", "WAITING_FAIRWAY",
+            }
+            # Exclude the current hard-waiters (they're already at BIA today)
+            and vv not in _hard_waiters
+        ]
+        _tomorrow_congestion = len(_tomorrow_waiters)
+
+        # Headroom estimate based on the smallest inbound cargo size.
+        # Uses the minimum cargo among all current waiters as the representative
+        # shuttle parcel size.
+        _representative_parcel = _min_cargo if _min_cargo > 0 else MIN_INCOMING_TRANSFER_BBL
+
+        # Compute headroom for each existing transient (largest headroom wins)
+        _transient_vessels = [
+            vv for vv in self.vessels
+            if (getattr(vv, "_mto_transient_since_day", None) is not None
+                or getattr(vv, "_is_mto_offload", False))
+        ]
+        if _transient_vessels:
+            _best_headroom = max(
+                max(0.0, MTO_TRANSIENT_CAPACITY_BBL.get(vv.name, vv.cargo_capacity)
+                    - vv.cargo_bbl)
+                for vv in _transient_vessels
+            )
+        else:
+            # No active transient yet — use largest possible new receiver cap
+            _best_headroom = max(
+                (MTO_TRANSIENT_CAPACITY_BBL.get(vv.name, vv.cargo_capacity)
+                 for vv in waiters
+                 if vv.name not in MTO_NEVER_RECEIVER),
+                default=float(DAUGHTER_CARGO_BBL),
+            )
+        _headroom_parcels = max(1, int(_best_headroom / max(_representative_parcel, 1)))
+
+        if _escalate_mto:
+            # Both primaries down or export window — aggressive accumulation
+            # capped only by physical headroom
+            _effective_parcel_limit = min(MTO_MAX_PARCELS_ESCALATED, _headroom_parcels)
+        elif _tomorrow_congestion >= 2:
+            # Congestion expected tomorrow — stay as receiver, absorb more parcels
+            _effective_parcel_limit = min(MTO_MAX_PARCELS_ESCALATED, _headroom_parcels)
+        else:
+            # Congestion clears tomorrow (or only 1 more vessel) — offload quickly
+            _effective_parcel_limit = MTO_MAX_PARCELS_BEFORE_OFFLOAD
+
+        # ─────────────────────────────────────────────────────────────────────
+        # AGGRESSIVE MULTI-PAIR mode (export unavailability active)
+        # ─────────────────────────────────────────────────────────────────────
+        if _export_unavail_now:
+            self._mto_run_aggressive_pairs(
+                t, day_key, waiters, _hard_wait, _effective_parcel_limit
+            )
+            return
+
+        # ─────────────────────────────────────────────────────────────────────
+        # NORMAL SINGLE-PAIR mode
+        # ─────────────────────────────────────────────────────────────────────
+        self._mto_days_fired[day_key] = self._mto_days_fired.get(day_key, 0) + 1
+
+        # ── Helper: MTO cap ───────────────────────────────────────────────────
+        def _mto_cap(vv):
+            return MTO_TRANSIENT_CAPACITY_BBL.get(vv.name, vv.cargo_capacity)
+
+        # ── Check for an existing active transient to top up ──────────────────
+        existing_transient = next(
+            (vv for vv in waiters
+             if (getattr(vv, "_mto_transient_since_day", None) is not None
+                 or getattr(vv, "_is_mto_offload", False))),
+            None
+        )
+
+        if existing_transient is not None:
+            # ── PRIORITY OVERRIDE: mother vessel supersedes MTO ───────────────
+            # If a primary mother has returned from export and can berth the
+            # existing transient before today's daylight ends, do NOT pair the
+            # transient with any more dischargers.  The WAITING_BERTH_B handler
+            # (which runs immediately after this function in the same tick) will
+            # claim the berth and start the discharge.
+            #
+            # This resolves the race condition where MTO fires first and adds
+            # more cargo to Watson while Bryanston just became available —
+            # leaving Watson too full to discharge efficiently and blocking the
+            # berth from other vessels.
+            if self._mto_transient_can_discharge_today(existing_transient, t):
+                self.log_event(
+                    t, existing_transient.name, "MTO_PARCEL_LIMIT_REACHED",
+                    f"[MTO Day {day_key+1}] Mother vessel available — "
+                    f"suspending MTO top-ups for {existing_transient.name} "
+                    f"({existing_transient.cargo_bbl:,.0f} bbl on board). "
+                    f"WAITING_BERTH_B will claim primary berth this tick.",
+                    voyage_num=existing_transient.current_voyage,
+                )
+                return
+
+            _parcels_so_far = getattr(existing_transient, "_mto_parcels_received", 0)
+            _trn_cap  = _mto_cap(existing_transient)
+            _headroom = max(0.0, _trn_cap - existing_transient.cargo_bbl)
+            _has_queued_discharger = any(
+                getattr(vv, "_mto_target_vessel", None) == existing_transient.name
                 for vv in self.vessels
             )
-            if daughter_active:
-                continue
-            # No daughter is en-route or waiting to berth at this mother
-            daughter_arriving = any(
-                vv.assigned_mother == mn and
-                vv.status in {
-                    "SAILING_AB_LEG2", "WAITING_FAIRWAY", "SAILING_BW_TO_FWY",
-                    "WAITING_BERTH_B", "WAITING_MOTHER_RETURN", "WAITING_MOTHER_CAPACITY",
-                }
-                for vv in self.vessels
-            )
-            if not daughter_arriving:
-                # Mother is fully idle and no daughter is coming — transload now
-                # regardless of how much SanJulian holds (even a small amount)
-                amount = min(sj_vol, space)
-                if amount > 0:
-                    return "T3-IDLE_NO_ARRIVAL", mn, amount
+            if (_parcels_so_far >= _effective_parcel_limit or _headroom <= 0) and not _has_queued_discharger:
+                self.log_event(
+                    t, existing_transient.name, "MTO_PARCEL_LIMIT_REACHED",
+                    f"[MTO Day {day_key+1}] No further top-ups — "
+                    f"{'parcel limit reached' if _parcels_so_far >= _effective_parcel_limit else 'at capacity'} "
+                    f"({existing_transient.cargo_bbl:,.0f}/{_trn_cap:,.0f} bbl) | "
+                    f"{'ESCALATED (both primaries down)' if _both_primaries_down else 'normal limit'} | "
+                    f"awaiting opportunistic mother berth",
+                    voyage_num=existing_transient.current_voyage,
+                )
+                return
+            elif (_parcels_so_far >= _effective_parcel_limit or _headroom <= 0) and _has_queued_discharger:
+                return
 
-        # T4 — Optimisation: any primary mother has ≥SANJULIAN_OPTIM_MIN_SPACE_BBL free.
-        # Uses relaxed eligibility — export_ready mothers are included because they
-        # are physically at BIA and can absorb cargo before departure.
-        best_mother, best_space = None, 0
-        for mn in self._sj_primary_mothers():
-            if not _sj_eligible_relaxed(mn):
-                continue
-            space = self.mother_capacity_bbl(mn) - self.mother_bbl[mn]
-            if space > best_space:
-                best_space = space
-                best_mother = mn
-        if best_mother and best_space >= SANJULIAN_OPTIM_MIN_SPACE_BBL:
-            return "T4-OPTIMISATION", best_mother, min(sj_vol, best_space)
+            remaining = [vv for vv in waiters
+                         if vv is not existing_transient
+                         and vv.name not in PRIMARY_MOTHERS_ONLY_VESSELS]
+            if not remaining:
+                return
+            _trn_cap_existing = _mto_cap(existing_transient)
+            _fits_topup = [
+                vv for vv in remaining
+                if vv.cargo_bbl <= _headroom
+                and _mto_cap(vv) <= _trn_cap_existing
+            ]
+            if not _fits_topup:
+                return
+            discharger_v = min(_fits_topup, key=lambda vv: vv.cargo_bbl)
+            transient_v  = existing_transient
+            transfer_bbl = min(discharger_v.cargo_bbl, _headroom)
+        else:
+            # ── Nominate a new transient ──────────────────────────────────────
+            def _nom_score(vv):
+                cap    = _mto_cap(vv)
+                hdroom = max(0.0, cap - vv.cargo_bbl)
+                hard_bonus = 1_000_000 if vv.status in _hard_wait else 0
+                return cap * 10_000 + hdroom + hard_bonus
 
-        # T5 — Eager post-second-parcel drain: fires as soon as the 2-daughter
-        # gate is met and SanJulian holds meaningful volume, even if no mother
-        # has the full SANJULIAN_OPTIM_MIN_SPACE_BBL headroom.  Uses a much lower
-        # floor (MIN_INCOMING_TRANSFER_BBL — one daughter cargo).
-        # Also uses relaxed eligibility for the same reason as T4.
-        if sj_vol >= SANJULIAN_OPTIM_MIN_SPACE_BBL:
-            best_t5_mother, best_t5_space = None, 0
-            for mn in self._sj_primary_mothers():
-                if not _sj_eligible_relaxed(mn):
+            # A vessel that can DIRECTLY discharge to a primary mother today
+            # must NEVER be nominated as an MTO transient receiver — it has a
+            # viable berth and nominating it as transient wastes that berth slot
+            # while artificially inflating the MTO cargo queue.
+            #
+            # "Can berth directly today" means:
+            #   (a) the vessel's cargo fits within a primary mother's live headroom
+            #   (b) that mother's berth will be free within today's daylight window
+            #   (c) the mother is physically at BIA (not at export)
+            #
+            # This is the fix for Woodstock (42k) being nominated as MTO transient
+            # when Bryanston has 100k headroom and a free berth — Woodstock should
+            # discharge to Bryanston directly rather than being consolidated.
+            _can_berth_directly = set()
+            for _vv in waiters:
+                for _mn in MOTHER_NAMES:
+                    if not self.mother_is_at_point_b(_mn, t):
+                        continue
+                    if self.export_ready.get(_mn, False):
+                        continue
+                    if self.export_state.get(_mn) in EXPORT_BUSY_STATES:
+                        continue
+                    _mspace = max(
+                        0.0,
+                        self.mother_capacity_bbl(_mn) - self.mother_bbl.get(_mn, 0)
+                    )
+                    if _vv.cargo_bbl > _mspace:
+                        continue
+                    # Berth free within today's daylight?
+                    _bfree = self.mother_berth_free_at.get(_mn, 0.0)
+                    if _bfree <= _daylight_end_t:
+                        _can_berth_directly.add(_vv.name)
+                        break
+
+            # Use all waiters (hard + soft) for eligibility — Gate 2 may have
+            # fired on soft-waiters (inbound) when converging vessels exceed slots.
+            # Exclude vessels that can berth a primary directly — they don't need MTO.
+            _eligible_transients = [
+                vv for vv in waiters
+                if vv.name not in MTO_NEVER_RECEIVER
+                and vv.name not in _can_berth_directly
+            ]
+            if not _eligible_transients:
+                return
+            waiters_scored = sorted(_eligible_transients, key=_nom_score, reverse=True)
+            transient_v   = waiters_scored[0]
+            _trn_cap      = _mto_cap(transient_v)
+            _headroom     = max(0.0, _trn_cap - transient_v.cargo_bbl)
+            if _headroom <= 0:
+                return
+
+            remaining = [vv for vv in waiters
+                         if vv is not transient_v
+                         and vv.name not in PRIMARY_MOTHERS_ONLY_VESSELS
+                         and vv.name not in _can_berth_directly]  # never discharge to MTO when direct berth available
+            if not remaining:
+                return
+            _fits_clean = [
+                vv for vv in remaining
+                if vv.cargo_bbl <= _headroom and _mto_cap(vv) <= _trn_cap
+            ]
+            _fits_partial = [vv for vv in remaining if vv.cargo_bbl <= _headroom]
+
+            if _fits_clean:
+                discharger_v = min(_fits_clean, key=lambda vv: vv.cargo_bbl)
+            elif _fits_partial:
+                discharger_v = min(_fits_partial, key=lambda vv: vv.cargo_bbl)
+            else:
+                return
+
+            transfer_bbl = min(discharger_v.cargo_bbl, _headroom)
+            transient_v._mto_transient_since_day = day_key
+            transient_v._mto_parcels_received    = 0
+
+        if transfer_bbl <= 0:
+            return
+
+        self._mto_execute_pair(
+            t, day_key, transient_v, discharger_v, transfer_bbl, _escalate_mto
+        )
+
+    def _mto_run_aggressive_pairs(self, t, day_key, waiters, hard_wait_set, parcel_limit):
+        """Form the globally optimal set of concurrent transient/discharger pairs.
+
+        During export unavailability every eligible vessel with headroom becomes
+        a receiver; every other vessel with cargo discharges into the best
+        available receiver.  Multiple pairs operate simultaneously:
+            Watson  ← Bagshot        (Watson has most headroom)
+            Amyla   ← Woodstock      (Amyla becomes receiver when Watson is full)
+            SantaMonica → any receiver with headroom
+
+        Algorithm — globally optimal bipartite matching:
+          1. Build the set of CANDIDATE RECEIVERS: every non-MTO_NEVER_RECEIVER
+             waiter whose berth is free, who has headroom, and who has not
+             exceeded the parcel limit.  Rank by (already_receiver, MTO_cap) so
+             established receivers are filled first before new ones are opened.
+          2. Build the set of CANDIDATE DISCHARGERS: every waiter with cargo > 0
+             that is not already designated as a receiver this tick.
+          3. Run a greedy optimal matching:
+             - For each discharger (smallest cargo first — fastest return to load):
+               find the receiver that maximises transferred volume (most headroom,
+               berth free, cap >= discharger cargo).
+             - If no receiver can take this discharger at full cargo, try partial.
+             - A vessel can only hold one role per tick (_assigned set).
+          4. Execute all matched pairs.
+
+        Rules:
+          - MTO_NEVER_RECEIVER vessels (Rahama, SantaMonica) are dischargers only.
+          - Berth serialisation: _mto_berth_free_at prevents double-booking a receiver.
+          - Parcel limit prevents endless top-ups before the receiver offloads.
+          - A vessel already marked as receiver (_mto_transient_since_day set) is
+            preferred as receiver over a fresh vessel of equal cap — fills it first.
+        """
+        def _mto_cap(vv):
+            return MTO_TRANSIENT_CAPACITY_BBL.get(vv.name, vv.cargo_capacity)
+
+        # ── Step 1: identify candidate receivers ──────────────────────────────
+        # Sort: already-nominated receivers first (fill before opening new ones),
+        # then by MTO cap descending (largest vessel = best receiver).
+        def _recv_score(vv):
+            already = 1 if getattr(vv, "_mto_transient_since_day", None) is not None else 0
+            return (already, _mto_cap(vv))
+
+        _candidate_receivers = sorted(
+            [
+                vv for vv in waiters
+                if vv.name not in MTO_NEVER_RECEIVER
+                and max(0.0, _mto_cap(vv) - vv.cargo_bbl) > 0
+                and getattr(vv, "_mto_berth_free_at", 0.0) <= t
+                and getattr(vv, "_mto_parcels_received", 0) < parcel_limit
+                # ── PRIORITY OVERRIDE: exclude vessels that can berth a primary
+                # mother today — they must discharge rather than accumulate more
+                # cargo.  "Mother vessel daily operation supersedes MTO."
+                and not (
+                    getattr(vv, "_mto_transient_since_day", None) is not None
+                    and self._mto_transient_can_discharge_today(vv, t)
+                )
+            ],
+            key=_recv_score,
+            reverse=True,
+        )
+
+        if not _candidate_receivers:
+            return
+
+        # ── Step 2: identify candidate dischargers ────────────────────────────
+        # Any waiter with cargo that is NOT in the receiver pool AND is NOT an
+        # established receiver (mto_transient_since_day set).  Established receivers
+        # hold consolidated cargo waiting for a mother berth — they must NOT be
+        # re-discharged into another vessel (they would lose all accumulated volume).
+        _recv_names = {vv.name for vv in _candidate_receivers}
+        _established_recv_names = {
+            vv.name for vv in waiters
+            if getattr(vv, "_mto_transient_since_day", None) is not None
+        }
+        _candidate_dischargers = sorted(
+            [
+                vv for vv in waiters
+                if vv.cargo_bbl > 0
+                and vv.name not in _recv_names
+                and vv.name not in _established_recv_names
+                and vv.name not in PRIMARY_MOTHERS_ONLY_VESSELS
+            ],
+            # Smallest cargo first: fastest to discharge and return to load port
+            key=lambda vv: vv.cargo_bbl,
+        )
+
+        # ── Step 3: optimal greedy matching ───────────────────────────────────
+        # For each discharger find the best available receiver.
+        # "Best" = most headroom (maximises volume moved per berth slot),
+        # ties broken by largest MTO cap (keep large vessels as receivers).
+        _assigned_receivers  = set()   # receiver names claimed this tick
+        _assigned_dischargers = set()  # discharger names claimed this tick
+        _pairs = []                    # list of (recv, discharger, transfer_bbl)
+
+        # Build a mutable headroom map so sequential assignments see updated state
+        _headroom_now = {
+            vv.name: max(0.0, _mto_cap(vv) - vv.cargo_bbl)
+            for vv in _candidate_receivers
+        }
+
+        for dis in _candidate_dischargers:
+            if dis.name in _assigned_dischargers:
+                continue
+
+            # Find the best receiver for this discharger
+            best_recv = None
+            best_score = -1.0
+
+            for recv in _candidate_receivers:
+                if recv.name in _assigned_receivers:
                     continue
-                space = self.mother_capacity_bbl(mn) - self.mother_bbl[mn]
-                if space > best_t5_space:
-                    best_t5_space  = space
-                    best_t5_mother = mn
-            if best_t5_mother and best_t5_space >= MIN_INCOMING_TRANSFER_BBL:
-                return "T5-EAGER_DRAIN", best_t5_mother, min(sj_vol, best_t5_space)
+                headroom = _headroom_now[recv.name]
+                if headroom <= 0:
+                    continue
+                # Receiver cap must be >= discharger cap (bigger holds smaller rule)
+                if _mto_cap(recv) < _mto_cap(dis):
+                    continue
+                # How much can we actually transfer?
+                xfer = min(dis.cargo_bbl, headroom)
+                if xfer <= 0:
+                    continue
+                # Score: full-load preferred; then most headroom; then largest cap
+                full_bonus = 1_000_000 if xfer == dis.cargo_bbl else 0
+                hard_bonus = 500_000 if dis.status in hard_wait_set else 0
+                score = full_bonus + hard_bonus + headroom + _mto_cap(recv)
+                if score > best_score:
+                    best_score = score
+                    best_recv  = recv
 
-        # T6 — Post-export-return priority drain: a primary mother just returned
-        # from export (large free space ≥ 60% capacity) and SanJulian holds
-        # meaningful volume.  Drain immediately, bypassing the daughter gate, so
-        # the returned mother is topped up without delay and daughter pressure is
-        # relieved by freeing up SanJulian for new arrivals.
-        for mn in self._sj_primary_mothers():
-            if not self.mother_is_at_point_b(mn, t):
-                continue
-            if self.export_state.get(mn) == "DOC":
-                continue
-            cap_mn = self.mother_capacity_bbl(mn)
-            space  = cap_mn - self.mother_bbl[mn]
-            # Returned-from-export flag: mother is nearly empty (space ≥ 60% cap)
-            if space >= cap_mn * 0.60 and sj_vol >= MIN_INCOMING_TRANSFER_BBL:
-                amount = min(sj_vol, space)
-                return "T6-POST_EXPORT_RETURN", mn, amount
+            if best_recv is None:
+                # Relax the cap constraint — allow same-cap or smaller receiver
+                # as last resort (e.g. Amyla receiving Bagshot of equal MTO cap)
+                for recv in _candidate_receivers:
+                    if recv.name in _assigned_receivers:
+                        continue
+                    headroom = _headroom_now[recv.name]
+                    if headroom <= 0:
+                        continue
+                    xfer = min(dis.cargo_bbl, headroom)
+                    if xfer <= 0:
+                        continue
+                    full_bonus = 1_000_000 if xfer == dis.cargo_bbl else 0
+                    hard_bonus = 500_000 if dis.status in hard_wait_set else 0
+                    score = full_bonus + hard_bonus + headroom + _mto_cap(recv)
+                    if score > best_score:
+                        best_score = score
+                        best_recv  = recv
 
-        return None, None, 0
+            if best_recv is None:
+                continue
+
+            xfer_bbl = min(dis.cargo_bbl, _headroom_now[best_recv.name])
+            if xfer_bbl <= 0:
+                continue
+
+            _pairs.append((best_recv, dis, xfer_bbl))
+            _assigned_receivers.add(best_recv.name)
+            _assigned_dischargers.add(dis.name)
+            # Reduce headroom so subsequent dischargers see the updated state
+            _headroom_now[best_recv.name] -= xfer_bbl
+
+        # ── Step 4: execute all matched pairs ─────────────────────────────────
+        _pairs_fired = 0
+        for recv, dis, xfer_bbl in _pairs:
+            # Initialise receiver tracking on first nomination this stay
+            if getattr(recv, "_mto_transient_since_day", None) is None:
+                recv._mto_transient_since_day = day_key
+                recv._mto_parcels_received    = 0
+
+            self._mto_execute_pair(t, day_key, recv, dis, xfer_bbl, escalated=True)
+            _pairs_fired += 1
+
+        if _pairs_fired:
+            self._mto_days_fired[day_key] = (
+                self._mto_days_fired.get(day_key, 0) + _pairs_fired
+            )
+
+    def _mto_execute_pair(self, t, day_key, transient_v, discharger_v,
+                          transfer_bbl, escalated=False):
+        """Execute one vessel-to-vessel MTO transfer with full BIA timing.
+
+        Separated from _maybe_run_multiple_transient_op so both the single-pair
+        normal mode and the multi-pair aggressive mode share the same physics
+        and logging.
+        """
+        def _mto_cap(vv):
+            return MTO_TRANSIENT_CAPACITY_BBL.get(vv.name, vv.cargo_capacity)
+
+        # Serialisation: berth locked until previous discharger casts off
+        _transient_berth_free = getattr(transient_v, "_mto_berth_free_at", 0.0)
+        if _transient_berth_free > t:
+            return
+
+        # Full BIA timing: berthing → hose → pump → cast-off
+        _berth_start   = t + BERTHING_DELAY_HOURS
+        _hose_start    = _berth_start + POST_BERTHING_START_GAP_HOURS
+        _pump_start    = _hose_start + HOSE_CONNECTION_HOURS
+        _disch_rate    = VESSEL_DISCHARGE_RATE_BPH.get(discharger_v.name)
+        transfer_hours = (transfer_bbl / _disch_rate) if _disch_rate else DISCHARGE_HOURS
+        _pump_end      = _pump_start + transfer_hours
+        cast_off_t     = self.next_cast_off_window(_pump_end)
+        transfer_end_t = cast_off_t + CAST_OFF_HOURS
+
+        # Lock this receiver's berth until cast-off completes
+        transient_v._mto_berth_free_at = transfer_end_t
+
+        # Blend API
+        _dis_api = self.vessel_api.get(discharger_v.name, 0.0)
+        _trn_api = self.vessel_api.get(transient_v.name, 0.0)
+        _trn_vol = transient_v.cargo_bbl
+        _new_trn = _trn_vol + transfer_bbl
+        if _new_trn > 0:
+            self.vessel_api[transient_v.name] = (
+                (_trn_vol * _trn_api + transfer_bbl * _dis_api) / _new_trn
+            )
+        transient_v.cargo_bbl = _new_trn
+        transient_v._mto_parcels_received = getattr(
+            transient_v, "_mto_parcels_received", 0) + 1
+
+        # Discharger: empty cargo, return to load
+        discharger_v.cargo_bbl = 0
+        self.vessel_api[discharger_v.name] = 0.0
+        discharger_v.status          = "CAST_OFF_B"
+        discharger_v.next_event_time = transfer_end_t
+
+        # Receiver: stays WAITING_BERTH_B, but cannot seek a primary mother
+        # berth until the transfer from the discharger is physically complete.
+        # transfer_end_t already accounts for berthing + hose + pump + cast-off.
+        # Setting next_event_time to t + 30min was the bug causing Woodstock to
+        # berth Bryanston 3 hours after Rahama's transfer started — physically
+        # impossible given Rahama's 30k / 4000 bph = 7.5h pump time.
+        transient_v.status          = "WAITING_BERTH_B"
+        transient_v.next_event_time = transfer_end_t
+
+        # Logging
+        _parcel_num  = transient_v._mto_parcels_received
+        _cap_label   = _mto_cap(transient_v)
+        _hdroom_left = max(0.0, _cap_label - transient_v.cargo_bbl)
+        _mode_tag    = "AGGRESSIVE-MULTI" if escalated else "NORMAL"
+        self.log_event(
+            t, transient_v.name, "MTO_TRANSIENT_NOMINATED",
+            f"[MTO {_mode_tag} Day {day_key+1} — Parcel {_parcel_num}] "
+            f"Received {transfer_bbl:,.0f} bbl from {discharger_v.name} "
+            f"@ {_dis_api:.2f}° API | on-board: {transient_v.cargo_bbl:,.0f} bbl "
+            f"(cap {_cap_label:,.0f} bbl, {_hdroom_left:,.0f} bbl headroom remaining) | "
+            f"berth locked until {self.hours_to_dt(transfer_end_t).strftime('%Y-%m-%d %H:%M')}",
+            voyage_num=transient_v.current_voyage,
+        )
+        self.log_event(
+            t, discharger_v.name, "MTO_DISCHARGE_TO_TRANSIENT",
+            f"[MTO {_mode_tag} Day {day_key+1}] Berthing+hose+pump to {transient_v.name}: "
+            f"{transfer_bbl:,.0f} bbl ({BERTHING_DELAY_HOURS:.1f}h berth + "
+            f"{HOSE_CONNECTION_HOURS:.1f}h hose + {transfer_hours:.1f}h pump = "
+            f"{BERTHING_DELAY_HOURS + HOSE_CONNECTION_HOURS + transfer_hours:.1f}h total) | "
+            f"freed — returning to reload | cast-off "
+            f"{self.hours_to_dt(transfer_end_t).strftime('%Y-%m-%d %H:%M')}",
+            voyage_num=discharger_v.current_voyage,
+        )
+        if transfer_hours > 0:
+            self.log_event(
+                _pump_end, discharger_v.name, "MTO_TRANSFER_COMPLETE",
+                f"Transfer complete | {transient_v.name}: {transient_v.cargo_bbl:,.0f} bbl on board | "
+                f"next discharger may berth after {self.hours_to_dt(transfer_end_t).strftime('%Y-%m-%d %H:%M')}",
+                voyage_num=discharger_v.current_voyage,
+            )
 
     def _run_zeezee(self, t):
         """Monthly arrival trigger + full discharge state machine for ZeeZee.
@@ -2310,13 +3392,11 @@ class Simulation:
             return
 
         if _zz.status == "WAITING_B":
-            # Find earliest-available PRIMARY mother (never SanJulian)
+            # Find earliest-available mother
             _best_start  = None
             _best_mother = None
             _bwin        = self.next_berthing_window(t, point="B")
             for _mn in MOTHER_NAMES:
-                if _mn == MOTHER_QUATERNARY_NAME:
-                    continue                       # skip SanJulian
                 if not self.mother_is_at_point_b(_mn, t):
                     continue                       # operationally absent
                 _mcap = self.mother_capacity_bbl(_mn)
@@ -2380,9 +3460,10 @@ class Simulation:
             # ── Berth secured: proceed to BERTHING_B ─────────────────────────
             _zz.daughter_block_since = None
             _zz.assigned_mother = _best_mother
-            _discharge_hrs = _zz.cargo_bbl / ThirdPartyVessel.DISCHARGE_RATE_BPH
-            _discharge_end = (_best_start + BERTHING_DELAY_HOURS
-                              + HOSE_CONNECTION_HOURS + _discharge_hrs)
+            _zz_rate = VESSEL_DISCHARGE_RATE_BPH.get("ZeeZee", ThirdPartyVessel.DISCHARGE_RATE_BPH)
+            _discharge_hrs = _zz.cargo_bbl / _zz_rate
+            _pump_end_zz   = _best_start + BERTHING_DELAY_HOURS + HOSE_CONNECTION_HOURS + _discharge_hrs
+            _discharge_end = _berth_free_at(_pump_end_zz)
             self.mother_berth_free_at[_best_mother] = max(
                 self.mother_berth_free_at[_best_mother], _discharge_end)
             _zz.status = "BERTHING_B"
@@ -2426,10 +3507,11 @@ class Simulation:
             )
             self.mother_bbl[_mn] += _zz.cargo_bbl
             self.total_loaded    += _zz.cargo_bbl
-            _discharge_hrs = _zz.cargo_bbl / ThirdPartyVessel.DISCHARGE_RATE_BPH
+            _zz_rate = VESSEL_DISCHARGE_RATE_BPH.get("ZeeZee", ThirdPartyVessel.DISCHARGE_RATE_BPH)
+            _discharge_hrs = _zz.cargo_bbl / _zz_rate
             _zz.status = "DISCHARGING"
             self.mother_berth_free_at[_mn] = max(
-                self.mother_berth_free_at[_mn], t + _discharge_hrs)
+                self.mother_berth_free_at[_mn], _berth_free_at(t + _discharge_hrs))
             _zz.next_event_time = t + _discharge_hrs
             self.log_event(
                 t, "ZeeZee", "DISCHARGE_START",
@@ -2454,359 +3536,78 @@ class Simulation:
                            "ZeeZee cast off and departed — next visit next month")
             self.zeezee = None   # visit complete; reset for next month trigger
 
-    def _run_sanjulian_transload(self, t):
-        """Advance SanJulian's transload state machine each time-step.
+            # NOTE: the physical BERTHING_START_B event is intentionally NOT logged
+            # here.  berth_start is a *plan*; another actor can still claim the berth
+            # first.  The berth is logged only once the vessel actually proceeds past
+            # the concurrent-occupancy guard at the BERTHING_B → HOSE_CONNECT_B
+            # transition, so the journey plan never shows a physical berth that was
+            # immediately aborted without pumping.
 
-        SanJulian behaves exactly like a daughter vessel when transloading:
-          BERTHING_B    → hose connection starts after BERTHING_DELAY_HOURS
-          HOSE_CONNECT_B→ discharge starts after HOSE_CONNECTION_HOURS;
-                           cargo credited to target mother at this point
-          DISCHARGING   → cast-off window opens after pump completes
-          CAST_OFF_B    → transload cycle complete; export_ready set on target
+    # ── Variability-aware duration helpers ───────────────────────────────────
 
-        All events are logged with Vessel = "SanJulian" so the mother vessel
-        receiving the transload shows it identically to a daughter discharge.
-        The target mother's berth slot is reserved for the full cycle duration.
+    def _berthing_delay(self) -> float:
+        """Return a sampled berthing delay (manoeuver + human lag).
+
+        Accounts for pilot availability, traffic separation, crew readiness and
+        human decision lag.  Returns BERTHING_DELAY_HOURS in deterministic mode.
         """
-        _sj = MOTHER_QUATERNARY_NAME
+        nominal = BERTHING_DELAY_HOURS
+        if not ENABLE_VARIABILITY:
+            return nominal
+        sampled = _variability_sample(nominal, VARIABILITY_CV_BERTHING) + _human_lag_hours()
+        if hasattr(self, "_sim_stats"):
+            self._sim_stats.record("berthing_delay", nominal, sampled)
+        return sampled
 
-        # ── Phase advance: step the active status forward ─────────────────────
-        if self.sanjulian_status is not None and self.sanjulian_next_t is not None:
-            if t < self.sanjulian_next_t - 1e-6:
-                return   # phase not yet complete — nothing to do this step
+    def _hose_connect_hours(self) -> float:
+        """Return a sampled hose-connection duration.
 
-            target = self.sanjulian_target
-            amount = self.sanjulian_amount
+        Reflects variability in crew readiness, equipment condition, and
+        number of vessels competing for port resources.  Returns
+        HOSE_CONNECTION_HOURS in deterministic mode.
+        """
+        nominal = HOSE_CONNECTION_HOURS
+        if not ENABLE_VARIABILITY:
+            return nominal
+        n_waiting = sum(
+            1 for vv in self.vessels
+            if vv.status in {"WAITING_BERTH_B", "BERTHING_B", "HOSE_CONNECT_B"}
+        )
+        sampled = (
+            _variability_sample(nominal, VARIABILITY_CV_HOSE_CONNECT)
+            * _congestion_factor(n_waiting)
+        )
+        if hasattr(self, "_sim_stats"):
+            self._sim_stats.record("hose_connect", nominal, sampled)
+        return sampled
 
-            # ── BERTHING_B → HOSE_CONNECT_B ──────────────────────────────────
-            if self.sanjulian_status == "BERTHING_B":
-                if not self.mother_is_at_point_b(target, t):
-                    self.log_event(t, _sj, "SJ_TRANSLOAD_ABORT",
-                                   f"Transload to {target} aborted during berthing "
-                                   f"— {target} left Point B")
-                    self._sj_reset()
-                    return
-                self.sanjulian_status = "HOSE_CONNECT_B"
-                self.sanjulian_next_t = t + HOSE_CONNECTION_HOURS
-                self.sanjulian_transload_state = {
-                    "target": target, "amount": amount,
-                    "end_t": self.sanjulian_next_t, "phase": "HOSE_CONNECT_B",
-                }
-                self.log_event(t, _sj, "HOSE_CONNECTION_START_B",
-                               f"Hose connection initiated at {target} "
-                               f"({HOSE_CONNECTION_HOURS}h) — transloading "
-                               f"{amount:,.0f} bbl from SanJulian",
-                               mother=target)
-                return   # ← explicit return: do NOT fall through to next elif
+    def _export_doc_hours(self) -> float:
+        """Return a sampled export documentation duration.
 
-            # ── HOSE_CONNECT_B → DISCHARGING: credit cargo to mother now ─────
-            elif self.sanjulian_status == "HOSE_CONNECT_B":
-                if not self.mother_is_at_point_b(target, t):
-                    self.log_event(t, _sj, "SJ_TRANSLOAD_ABORT",
-                                   f"Transload to {target} aborted during hose connection "
-                                   f"— {target} left Point B")
-                    self._sj_reset()
-                    return
-                # Use full current SanJulian stock (not the stale committed amount) —
-                # more barrels may have arrived since the cycle started.
-                # Clamp to available mother space.
-                sj_vol  = self.mother_bbl[_sj]
-                space   = max(0.0, self.mother_capacity_bbl(target) - self.mother_bbl[target])
-                actual  = min(sj_vol, space)
-                if actual <= 0:
-                    self.log_event(t, _sj, "SJ_TRANSLOAD_ABORT",
-                                   f"Transload to {target} aborted — "
-                                   f"no volume to transfer (SJ: {sj_vol:,.0f} bbl, "
-                                   f"space: {space:,.0f} bbl)")
-                    self._sj_reset()
-                    return
-                # Blend API and credit barrels to target mother
-                sj_api  = self.mother_api.get(_sj, 0.0)
-                tgt_api = self.mother_api.get(target, 0.0)
-                tgt_vol = self.mother_bbl[target]
-                new_tgt = tgt_vol + actual
-                if new_tgt > 0:
-                    self.mother_api[target] = (
-                        (tgt_vol * tgt_api + actual * sj_api) / new_tgt
-                    )
-                self.mother_bbl[target] = new_tgt
-                self.mother_bbl[_sj]   -= actual
-                if self.mother_bbl[_sj] <= 0:
-                    self.mother_api[_sj] = 0.0
-                self.sanjulian_amount = actual  # store actual for DISCHARGE_COMPLETE log
+        Port office workload, pre-departure inspections and cargo measurement
+        disputes all contribute to documentation variability.
+        """
+        nominal = EXPORT_DOC_HOURS
+        if not ENABLE_VARIABILITY:
+            return nominal
+        sampled = _variability_sample(nominal, VARIABILITY_CV_EXPORT_DOC)
+        if hasattr(self, "_sim_stats"):
+            self._sim_stats.record("export_doc", nominal, sampled)
+        return sampled
 
-                pump_hours = actual / SANJULIAN_TRANSLOAD_RATE_BPH
-                self.sanjulian_status = "DISCHARGING"
-                self.sanjulian_next_t = t + pump_hours
-                self.mother_berth_free_at[target] = max(
-                    self.mother_berth_free_at.get(target, 0.0),
-                    t + pump_hours + CAST_OFF_HOURS,
-                )
-                self.sanjulian_transload_state = {
-                    "target": target, "amount": actual,
-                    "end_t": self.sanjulian_next_t, "phase": "DISCHARGING",
-                }
-                self.log_event(t, _sj, "DISCHARGE_START",
-                               f"Discharging {actual:,.0f} bbl @ {sj_api:.2f}° API | "
-                               f"{target}: {self.mother_bbl[target]:,.0f} bbl "
-                               f"(blended {self.mother_api[target]:.2f}° API)",
-                               mother=target)
-                return   # ← explicit return: do NOT fall through
+    def calibration_report(self) -> dict:
+        """Return the planned-vs-actual calibration metrics collected this run.
 
-            # ── DISCHARGING → CAST_OFF_B ─────────────────────────────────────
-            # SanJulian must empty ALL her volumes before casting off.
-            # If more barrels arrived during this pump cycle (e.g. a daughter
-            # discharged to SanJulian while she was already transloading),
-            # extend the discharge now — using the current target if space
-            # remains, or switching to another primary mother if needed.
-            elif self.sanjulian_status == "DISCHARGING":
-                sj_remaining = self.mother_bbl[_sj]
+        Keys: operation names.  Values: dicts with n, mean_planned_h,
+        mean_actual_h, mean_bias_h, rmse_h, pct_bias.
 
-                if sj_remaining > 0:
-                    # Check if current target still has space for the residual.
-                    # Per operational rules: residual cannot be redirected to another
-                    # vessel — only the original target may receive it.
-                    # If target has no space, abort the cycle and cast off with
-                    # whatever remains; the T1/T4 triggers will start a fresh cycle.
-                    cur_space = max(0.0, self.mother_capacity_bbl(target) - self.mother_bbl[target])
-                    if cur_space > 0 and self.mother_is_at_point_b(target, t):
-                        residual = min(sj_remaining, cur_space)
-                        sj_api   = self.mother_api.get(_sj, 0.0)
-                        tgt_api  = self.mother_api.get(target, 0.0)
-                        tgt_vol  = self.mother_bbl[target]
-                        new_tgt  = tgt_vol + residual
-                        if new_tgt > 0:
-                            self.mother_api[target] = (
-                                (tgt_vol * tgt_api + residual * sj_api) / new_tgt
-                            )
-                        self.mother_bbl[target] = new_tgt
-                        self.mother_bbl[_sj]   -= residual
-                        if self.mother_bbl[_sj] <= 0:
-                            self.mother_api[_sj] = 0.0
-                        self.sanjulian_amount += residual
-                        extra_pump_hours = residual / SANJULIAN_TRANSLOAD_RATE_BPH
-                        self.sanjulian_next_t = t + extra_pump_hours
-                        self.mother_berth_free_at[target] = max(
-                            self.mother_berth_free_at.get(target, 0.0),
-                            t + extra_pump_hours + CAST_OFF_HOURS,
-                        )
-                        self.sanjulian_transload_state = {
-                            "target": target, "amount": self.sanjulian_amount,
-                            "end_t": self.sanjulian_next_t, "phase": "DISCHARGING",
-                        }
-                        self.log_event(t, _sj, "DISCHARGE_START",
-                                       f"Pumping residual {residual:,.0f} bbl @ {sj_api:.2f}° API "
-                                       f"— SanJulian emptying before cast-off | "
-                                       f"{target}: {self.mother_bbl[target]:,.0f} bbl",
-                                       mother=target)
-                        return   # extend pump on same target — cast-off deferred
-                    else:
-                        # Target full or unavailable — cannot redirect residual.
-                        # Abort cycle and cast off; fresh cycle will handle remainder.
-                        self.log_event(t, _sj, "SJ_TRANSLOAD_ABORT",
-                                       f"{target} has no space for residual "
-                                       f"{sj_remaining:,.0f} bbl — aborting, casting off | "
-                                       f"SanJulian retains {sj_remaining:,.0f} bbl",
-                                       mother=target)
-                        actual = self.sanjulian_amount
-                        self.sanjulian_total_transloaded += actual
-                        cast_off_t = self.next_cast_off_window(t)
-                        wait_co    = cast_off_t - t
-                        self.sanjulian_status = "CAST_OFF_B"
-                        self.sanjulian_next_t = cast_off_t + CAST_OFF_HOURS
-                        self.sanjulian_transload_state = {
-                            "target": target, "amount": actual,
-                            "end_t": self.sanjulian_next_t, "phase": "CAST_OFF_B",
-                        }
-                        if wait_co > 0:
-                            self.log_event(t, _sj, "WAITING_CAST_OFF",
-                                           f"Night restriction — cast-off from {target} at "
-                                           f"{self.hours_to_dt(cast_off_t).strftime('%Y-%m-%d %H:%M')}",
-                                           mother=target)
-                        self.log_event(cast_off_t, _sj, "CAST_OFF_START_B",
-                                       f"Cast-off from {target} ({CAST_OFF_HOURS}h)",
-                                       mother=target)
-                        return
+        Useful for comparing the simulation against historical port data
+        and adjusting the CV constants to match observed variability.
+        """
+        if hasattr(self, "_sim_stats"):
+            return self._sim_stats.calibration_report()
+        return {}
 
-                actual     = self.sanjulian_amount
-                self.sanjulian_total_transloaded += actual
-                cast_off_t = self.next_cast_off_window(t)
-                wait_co    = cast_off_t - t
-                self.sanjulian_status = "CAST_OFF_B"
-                self.sanjulian_next_t = cast_off_t + CAST_OFF_HOURS
-                self.sanjulian_transload_state = {
-                    "target": target, "amount": actual,
-                    "end_t": self.sanjulian_next_t, "phase": "CAST_OFF_B",
-                }
-                self.log_event(t, _sj, "DISCHARGE_COMPLETE",
-                               f"{target}: {self.mother_bbl[target]:,.0f} bbl | "
-                               f"SanJulian emptied — {actual:,.0f} bbl total | "
-                               f"Cast-off scheduled "
-                               f"{self.hours_to_dt(cast_off_t).strftime('%H:%M')} "
-                               f"(wait {wait_co:.1f}h)",
-                               mother=target)
-                if wait_co > 0:
-                    self.log_event(t, _sj, "WAITING_CAST_OFF",
-                                   f"Night restriction — cast-off from {target} at "
-                                   f"{self.hours_to_dt(cast_off_t).strftime('%Y-%m-%d %H:%M')}",
-                                   mother=target)
-                self.log_event(cast_off_t, _sj, "CAST_OFF_START_B",
-                               f"Cast-off from {target} ({CAST_OFF_HOURS}h)",
-                               mother=target)
-                return   # ← explicit return: do NOT fall through
-
-            # ── CAST_OFF_B → cycle complete ──────────────────────────────────
-            elif self.sanjulian_status == "CAST_OFF_B":
-                # Before completing, check if more barrels arrived on SanJulian
-                # during the cast-off wait (daughter finished discharging while
-                # we waited for daylight).  Only pump to the current target —
-                # residual cannot be redirected to another vessel.
-                # If current target has no space, cast off and let the next
-                # cycle (T1/T4) handle the remainder.
-                sj_remaining = self.mother_bbl[_sj]
-
-                if sj_remaining > 0:
-                    cur_space = max(0.0, self.mother_capacity_bbl(target) - self.mother_bbl[target])
-                    if cur_space > 0 and self.mother_is_at_point_b(target, t):
-                        residual = min(sj_remaining, cur_space)
-                        sj_api   = self.mother_api.get(_sj, 0.0)
-                        tgt_api  = self.mother_api.get(target, 0.0)
-                        tgt_vol  = self.mother_bbl[target]
-                        new_tgt  = tgt_vol + residual
-                        if new_tgt > 0:
-                            self.mother_api[target] = (
-                                (tgt_vol * tgt_api + residual * sj_api) / new_tgt
-                            )
-                        self.mother_bbl[target] = new_tgt
-                        self.mother_bbl[_sj]   -= residual
-                        if self.mother_bbl[_sj] <= 0:
-                            self.mother_api[_sj] = 0.0
-                        self.sanjulian_amount += residual
-                        extra_pump_hours = residual / SANJULIAN_TRANSLOAD_RATE_BPH
-                        self.sanjulian_status = "DISCHARGING"
-                        self.sanjulian_next_t = t + extra_pump_hours
-                        self.mother_berth_free_at[target] = max(
-                            self.mother_berth_free_at.get(target, 0.0),
-                            t + extra_pump_hours + CAST_OFF_HOURS,
-                        )
-                        self.sanjulian_transload_state = {
-                            "target": target, "amount": self.sanjulian_amount,
-                            "end_t": self.sanjulian_next_t, "phase": "DISCHARGING",
-                        }
-                        self.log_event(t, _sj, "DISCHARGE_START",
-                                       f"Pumping residual {residual:,.0f} bbl arrived during "
-                                       f"cast-off wait @ {sj_api:.2f}° API | "
-                                       f"{target}: {self.mother_bbl[target]:,.0f} bbl",
-                                       mother=target)
-                        return   # back to DISCHARGING — cast-off deferred
-                    # else: target full / unavailable — cast off now with residual
-                    # remaining; a new cycle will start once SanJulian is free
-
-                actual = self.sanjulian_amount
-                # Mark target export-ready if it crossed the trigger
-                if (self.mother_bbl[target] >= self.mother_export_trigger_bbl(target)
-                        and not self.export_ready[target]):
-                    self.export_ready[target]       = True
-                    self.export_ready_since[target] = t
-                self.log_event(t, _sj, "SJ_TRANSLOAD_COMPLETE",
-                               f"Transload cycle complete → {target}: "
-                               f"{actual:,.0f} bbl | "
-                               f"SanJulian now {self.mother_bbl[_sj]:,.0f} bbl | "
-                               f"{target} now {self.mother_bbl[target]:,.0f} bbl",
-                               mother=target)
-                # ── Fender preparation after cast-off ───────────────────────
-                # SanJulian requires SANJULIAN_FENDER_PREP_HOURS of fender
-                # preparation after every cast-off before she can:
-                #   (a) receive a daughter vessel, or
-                #   (b) start a new transload cycle (berth next primary mother)
-                fender_ready = t + SANJULIAN_FENDER_PREP_HOURS
-                self.sanjulian_fender_ready_t = fender_ready
-                self.log_event(t, _sj, "SJ_FENDER_PREP",
-                               f"Post-cast-off fender preparation "
-                               f"({SANJULIAN_FENDER_PREP_HOURS}h) — "
-                               f"ready at {self.hours_to_dt(fender_ready).strftime('%H:%M')}",
-                               mother=target)
-                self.sanjulian_transload_end_t = t
-                self._sj_reset()
-                return
-
-        # ── Check whether a new transload cycle should start ──────────────────
-        if self.sanjulian_status is None:
-            reason, target, amount = self._sj_transload_trigger_check(t)
-            if not (reason and target and amount > 0):
-                return
-
-            # Compute berth start — wait for berthing window and berth availability.
-            # For T3 (idle mother, no daughter active or arriving), mother_berth_free_at
-            # may hold a stale timestamp from a previous completed discharge.  The berth
-            # is genuinely free now, so clamp berth_free_at to current time t.
-            # Also enforce that SanJulian's fender preparation is complete before she
-            # can berth: add SANJULIAN_FENDER_PREP_HOURS to earliest possible start.
-            _fender_earliest = max(t, self.sanjulian_fender_ready_t)
-            _is_t3 = reason.startswith("T3")
-            if _is_t3:
-                # Mother is confirmed idle — only respect the daylight berthing window
-                # and fender prep completion, not a potentially stale berth-free timestamp.
-                berth_start = self.next_berthing_window(_fender_earliest, point="B")
-                berth_start = max(berth_start, self.mother_available_at.get(target, 0.0))
-                berth_start = self.next_berthing_window(berth_start, point="B")
-            else:
-                berth_start = self.next_berthing_window(_fender_earliest, point="B")
-                berth_start = max(berth_start,
-                                  self.mother_berth_free_at.get(target, 0.0),
-                                  self.mother_available_at.get(target, 0.0))
-                berth_start = self.next_berthing_window(berth_start, point="B")
-            # Don't gate on mother_is_at_point_b here — SanJulian is always at BIA.
-            # The phase machine will abort if target leaves before hose connects.
-
-            # Log fender prep before berthing if it delays the start
-            if self.sanjulian_fender_ready_t > t + 1e-6:
-                self.log_event(t, _sj, "SJ_FENDER_PREP",
-                               f"Pre-berthing fender preparation "
-                               f"({SANJULIAN_FENDER_PREP_HOURS}h) before berthing {target} — "
-                               f"ready at {self.hours_to_dt(self.sanjulian_fender_ready_t).strftime('%H:%M')}",
-                               mother=target)
-
-            # Reserve berth for full cycle: berthing + hose + pump + cast-off
-            # (fender prep is already baked into berth_start via _fender_earliest)
-            pump_hours  = amount / SANJULIAN_TRANSLOAD_RATE_BPH
-            _full_cycle = (BERTHING_DELAY_HOURS + HOSE_CONNECTION_HOURS
-                           + pump_hours + CAST_OFF_HOURS)
-            self.mother_berth_free_at[target] = max(
-                self.mother_berth_free_at.get(target, 0.0),
-                berth_start + _full_cycle,
-            )
-            self.sanjulian_status = "BERTHING_B"
-            self.sanjulian_target = target
-            self.sanjulian_amount = amount
-            self.sanjulian_next_t = berth_start + BERTHING_DELAY_HOURS
-            self.sanjulian_transload_state = {
-                "target": target, "amount": amount,
-                "end_t": self.sanjulian_next_t, "phase": "BERTHING_B",
-            }
-            self.sanjulian_transload_end_t = berth_start + _full_cycle
-            self.log_event(t, _sj, "SJ_TRANSLOAD_START",
-                           f"[{reason}] Transload cycle started → {target}: "
-                           f"{amount:,.0f} bbl @ {SANJULIAN_TRANSLOAD_RATE_BPH:,} bph | "
-                           f"SanJulian: {self.mother_bbl[_sj]:,.0f} bbl | "
-                           f"{target}: {self.mother_bbl[target]:,.0f} bbl",
-                           mother=target)
-            self.log_event(berth_start, _sj, "BERTHING_START_B",
-                           f"Berthing at {target} ({BERTHING_DELAY_HOURS}h procedure) "
-                           f"— SanJulian transload",
-                           mother=target)
-
-    def _sj_reset(self):
-        """Clear all SanJulian transload state after a cycle ends or aborts."""
-        self.sanjulian_status          = None
-        self.sanjulian_target          = None
-        self.sanjulian_amount          = 0.0
-        self.sanjulian_next_t          = None
-        self.sanjulian_transload_state = None
-        # Reset daughter count. After the first cycle completes, no pre-seeded
-        # vessels remain, so threshold drops back to the base value of 2.
-        self.sanjulian_daughters_loaded        = 0
-        self.sanjulian_daughters_min_threshold = 2
     def next_wall_clock_hour(self, current_hour, wall_clock_hour):
         """Return next sim-hour aligned to a wall-clock hour (0-23)."""
         day_key = int(current_hour // 24)
@@ -2816,12 +3617,23 @@ class Simulation:
         return sim_target_today + 24
 
     def projected_mother_stock(self, mother_name, horizon, exclude_vessel=None):
-        """Projected mother stock by horizon based on currently committed BIA work."""
+        """Projected mother stock by horizon based on currently committed BIA work.
+
+        Oversized phantom reservations (vessels whose cargo exceeds the mother's
+        current live headroom) are excluded so they don't artificially inflate
+        the projected stock and bias mother selection away from Bryanston/GreenEagle
+        when genuine headroom exists for smaller vessels like SantaMonica.
+        """
         projected = float(self.mother_bbl[mother_name])
+        _live_headroom = max(0.0, self.mother_capacity_bbl(mother_name) - projected)
         for vv in self.vessels:
             if vv.name == exclude_vessel:
                 continue
             if vv.assigned_mother != mother_name or vv.cargo_bbl <= 0:
+                continue
+            # Skip phantom reservations: oversized vessels will be turned away
+            # by MOTHER_CAPACITY_ABORT and should not inflate the projected stock.
+            if vv.cargo_bbl > _live_headroom:
                 continue
             add_at = None
             if vv.status == "HOSE_CONNECT_B":
@@ -2837,35 +3649,52 @@ class Simulation:
     def select_point_b_mother(self, v, decision_time, day_key, candidates):
         """Pick the best Point B mother for faster turnaround and export readiness.
 
-        Primary mothers are generally preferred over SanJulian.  However, when a
-        same-day primary is delayed by more than SANJULIAN_DELAY_THRESHOLD_HOURS
-        beyond SanJulian's earliest available start, that primary is demoted so that
-        SanJulian absorbs the incoming daughter immediately rather than leaving her
-        idle for many hours at a congested BIA.  This is especially important when
-        a primary mother (e.g. Alkebulan) is offline — the remaining two primaries
-        can become fully occupied, and SanJulian must act as the active buffer.
-
         Grouping:
-          group 0 — same-day primary available within SANJULIAN_DELAY_THRESHOLD_HOURS
-                    of SanJulian's start (or SanJulian not in candidates)
-          group 1 — SanJulian (beats delayed primaries; loses to prompt primaries)
-          group 2 — same-day primary delayed beyond threshold, OR next-day primary
+          group 0 — mother can berth the vessel same-day
+          group 2 — next-day mother
         """
+        day_key = self.point_b_calendar_day_key(decision_time)
         assigned_today = self.point_b_day_assigned_mothers.setdefault(day_key, set())
         horizon_8 = self.next_wall_clock_hour(decision_time, 8)
         # Next midnight in sim-hours — used to identify same-day candidates
-        day_end = (int(decision_time // 24) + 1) * 24
+        day_end = (int((decision_time + SIM_HOUR_OFFSET) // 24) + 1) * 24
+
+        # PRIMARY_MOTHERS_ONLY vessels (e.g. SantaMonica) are the designated
+        # "last delivery" to the primary mother — they should not be penalised
+        # for pushing a near-full mother over its export trigger.  Regular
+        # daughters receive a trigger-avoidance penalty so they route to the
+        # mother with more headroom and leave the final top-up for the PMO vessel.
+        _is_pmo = v.name in PRIMARY_MOTHERS_ONLY_VESSELS
 
         ranked = []
         for start, berth_t, mother_name in candidates:
             add_at = start + BERTHING_DELAY_HOURS + HOSE_CONNECTION_HOURS
-            projected_8 = self.projected_mother_stock(
+            _base_stock = self.projected_mother_stock(
                 mother_name,
                 horizon_8,
                 exclude_vessel=v.name,
             )
+            projected_8 = _base_stock
             if add_at <= horizon_8 + 1e-6:
                 projected_8 += v.cargo_bbl
+            # For non-PMO daughters: flag when routing here would push the mother
+            # over her export trigger AND she was already close enough that a
+            # different vessel choice would avoid triggering altogether.
+            #
+            # Trigger-avoidance applies ONLY when the mother's current projected
+            # stock (before this vessel) is already at or above the trigger.
+            # When the trigger is only crossed because of this vessel's addition,
+            # that is the intended and correct outcome of a normal fill cycle —
+            # not a scheduling error to avoid.  Penalising it caused Woodstock
+            # (42k) to be routed to GreenEagle even though Bryanston at 450k
+            # was the right destination (450k + 42k = 492k → triggers export,
+            # which is exactly what should happen).
+            _exp_trig   = self.mother_export_trigger_bbl(mother_name)
+            _will_trigger = (
+                not _is_pmo
+                and _base_stock >= _exp_trig   # already at/above trigger WITHOUT this vessel
+                and projected_8 >= _exp_trig
+            )
             ranked.append({
                 "start": start,
                 "berth_t": berth_t,
@@ -2874,46 +3703,84 @@ class Simulation:
                 "same_day": start < day_end,
                 "unused_today": mother_name not in assigned_today,
                 "projected_8": projected_8,
-                "is_sanjulian": 1 if mother_name == MOTHER_QUATERNARY_NAME else 0,
+                "will_trigger": _will_trigger,
             })
-
-        # SanJulian's earliest start (None when she is not in candidates)
-        sj_entry = next((r for r in ranked if r["is_sanjulian"] == 1), None)
-        sj_start_ref = sj_entry["start"] if sj_entry else None
 
         # Sort all candidates together.
         # Key priority:
-        #   1. Primary prompt (same_day, start ≤ sj_start + threshold) → group 0
-        #   2. SanJulian                                                → group 1
-        #   3. Primary delayed (same_day but start > threshold) or next-day → group 2
-        #   Within each group: earlier start wins; then higher projected 08:00 stock;
-        #   then unused-today; then name (stable tiebreak).
+        #   1. Same-day mother → group 0
+        #      Within group 0: prefer the mother NOT yet used today (load balancing)
+        #      Then: earlier start; then lower projected stock; then name
+        #   2. Next-day mother → group 2
+        #
+        # Load-balancing threshold: two primaries are "equally prompt" when their
+        # start times are within LOAD_BALANCE_WINDOW_HOURS of each other.  Within
+        # that window, the unused-today flag is the first tiebreaker so traffic
+        # alternates between Bryanston and GreenEagle rather than funnelling to
+        # whichever has the lower current stock (which always favours the one that
+        # just returned from export).
+        LOAD_BALANCE_WINDOW_HOURS = 4.0
+
+        # Earliest group-0 primary start — used to detect "equally prompt" candidates
+        _g0_starts = [r["start"] for r in ranked if r["same_day"]]
+        _earliest_g0 = min(_g0_starts) if _g0_starts else None
+
         def _sort_key(r):
-            if r["is_sanjulian"] == 0 and r["same_day"]:
-                # Demote this primary if SanJulian is available and the primary
-                # is delayed far beyond SanJulian's start — avoids daughters
-                # queuing for many hours while SanJulian is idle.
-                if (sj_start_ref is not None
-                        and r["start"] > sj_start_ref + SANJULIAN_DELAY_THRESHOLD_HOURS):
-                    group = 2   # delayed same-day primary — SanJulian takes priority
-                else:
-                    group = 0   # promptly available same-day primary
-            elif r["is_sanjulian"] == 1:
-                group = 1   # SanJulian — beats delayed primaries
+            group = 0 if r["same_day"] else 2
+
+            # Fill ratio: projected stock / export trigger.  Higher ratio = closer
+            # to export trigger = should receive the next daughter first, so that
+            # the export cycle fires as soon as possible and the berth turns over.
+            # This ensures Bryanston (450k / 465k = 0.97) is preferred over
+            # GreenEagle (342k / 680k = 0.50) when both are available.
+            _trig  = self.mother_export_trigger_bbl(r["mother"]) or 1
+            _fill  = r["projected_8"] / _trig   # higher = closer to export
+
+            if _is_pmo:
+                _eq = (group == 0 and _earliest_g0 is not None
+                       and r["start"] <= _earliest_g0 + LOAD_BALANCE_WINDOW_HOURS)
+                return (
+                    group,
+                    0 if _eq else 1,
+                    0 if r["unused_today"] else 1,
+                    r["start"],
+                    -_fill,          # higher fill ratio → lower sort value → preferred
+                    r["mother"],
+                )
             else:
-                group = 2   # next-day primary
-            return (
-                group,
-                r["start"],
-                -r["projected_8"],
-                0 if r["unused_today"] else 1,
-                r["mother"],
-            )
+                return (
+                    group,
+                    1 if r["will_trigger"] else 0,
+                    0 if r["unused_today"] else 1,
+                    r["start"],
+                    -_fill,          # higher fill ratio → lower sort value → preferred
+                    r["mother"],
+                )
 
         ranked.sort(key=_sort_key)
         selected = ranked[0]
-        assigned_today.add(selected["mother"])
+        # NOTE: _point_b_register_mother_start is NOT called here.
+        # The lock fires at pump-start (HOSE_CONNECT_B → DISCHARGING) and is
+        # released at CAST_OFF_COMPLETE_B so the rule tracks actual cargo flow.
         return selected, horizon_8
+
+    def mother_fill_score(self):
+        """Return a 0–100 score measuring how well primary mothers are
+        accumulating cargo toward their export trigger.
+
+        Penalises mothers below 40 % of their export trigger (starvation zone).
+        Used by the objective function in run_optimizer().
+        """
+        scores = []
+        for mn in (MOTHER_PRIMARY_NAME, MOTHER_SECONDARY_NAME):
+            trig = MOTHER_EXPORT_TRIGGER_BY_NAME.get(mn, MOTHER_EXPORT_TRIGGER)
+            if trig <= 0:
+                continue
+            fill_frac = min(1.0, self.mother_bbl.get(mn, 0.0) / trig)
+            # Below 40 % fill: penalise proportionally
+            deficit = max(0.0, 0.40 - fill_frac)   # 0 when fill >= 40 %
+            scores.append(100.0 - deficit * 250.0)  # -1 pt per 0.4 % below 40 %
+        return max(0.0, sum(scores) / max(1, len(scores)))
 
     def log_event(self, t, vessel_name, event, detail="", voyage_num=None, mother=None):
         # O(1) vessel lookup via index dict (built lazily, invalidated on join).
@@ -2943,14 +3810,14 @@ class Simulation:
             "Mother"     : mother,
             "Vessel_api" : _vessel_api_snap,
             "Storage_bbl": round(self.total_storage_bbl()),
-            "Chapel_bbl": round(self.storage_bbl[STORAGE_PRIMARY_NAME]),
+            "SanBarth_bbl": round(self.storage_bbl[STORAGE_PRIMARY_NAME]),
             "JasmineS_bbl": round(self.storage_bbl[STORAGE_SECONDARY_NAME]),
             "Westmore_bbl": round(self.storage_bbl[STORAGE_TERTIARY_NAME]),
             "Duke_bbl": round(self.storage_bbl[STORAGE_QUATERNARY_NAME]),
             "Starturn_bbl": round(self.storage_bbl[STORAGE_QUINARY_NAME]),
             "PGM_bbl": round(self.storage_bbl[STORAGE_SENARY_NAME]),
             "Storage_Overflow_Accum_bbl": round(sum(self.storage_overflow_bbl.values())),
-            "Chapel_Overflow_Accum_bbl": round(self.storage_overflow_bbl[STORAGE_PRIMARY_NAME]),
+            "SanBarth_Overflow_Accum_bbl": round(self.storage_overflow_bbl[STORAGE_PRIMARY_NAME]),
             "JasmineS_Overflow_Accum_bbl": round(self.storage_overflow_bbl[STORAGE_SECONDARY_NAME]),
             "Westmore_Overflow_Accum_bbl": round(self.storage_overflow_bbl[STORAGE_TERTIARY_NAME]),
             "Duke_Overflow_Accum_bbl": round(self.storage_overflow_bbl[STORAGE_QUATERNARY_NAME]),
@@ -2959,11 +3826,9 @@ class Simulation:
             "PointF_Overflow_Accum_bbl": round(self.point_f_overflow_accum_bbl),
             "PointF_Active_Loading_bbl": round(self.point_f_active_loading_bbl()),
             "Mother_bbl" : round(self.total_mother_bbl()),
-            "Bryanston_bbl": round(self.mother_bbl[MOTHER_PRIMARY_NAME]),
-            "Alkebulan_bbl": round(self.mother_bbl[MOTHER_SECONDARY_NAME]),
-            "GreenEagle_bbl": round(self.mother_bbl[MOTHER_TERTIARY_NAME]),
-            "SanJulian_bbl": round(self.mother_bbl[MOTHER_QUATERNARY_NAME]),
-            "SanJulian": self.sanjulian_status or "IDLE_B",
+            "Bryanston_bbl":  round(self.mother_bbl[MOTHER_PRIMARY_NAME]),
+            "GreenEagle_bbl": round(self.mother_bbl[MOTHER_SECONDARY_NAME]),
+            "Alkebulan_bbl":  round(self.mother_bbl[MOTHER_QUINARY_NAME]),
             "Total_Exported_bbl": self.total_exported,
         })
 
@@ -2976,20 +3841,22 @@ class Simulation:
     # Dispatch-bias helpers
     # -----------------------------------------------------------------
 
-    def projected_stock_at(self, storage_name, horizon_h):
+    def projected_stock_at(self, storage_name, horizon_h, vessel_eta_offset=0.0):
         """Project stock at *storage_name* `horizon_h` hours from now.
-        Uses the current net production rate minus expected draws from all
-        vessels committed to this storage — including those waiting for a
-        berth (WAITING_BERTH_A, WAITING_STOCK) which are en route but not
-        yet loading.  Including them gives a more accurate end-of-day
-        forecast and prevents the dispatch engine from treating an already-
-        committed storage as under-served.
+
+        Accounts for:
+          - Net production inflow over the horizon
+          - Draws from all committed vessels (loading / berth-waiting)
+          - Optional vessel_eta_offset: time from now until the
+            candidate vessel would arrive (used by dispatch look-ahead
+            to forecast projected stock at vessel arrival time rather
+            than just the current horizon).
         """
         stock  = self.storage_bbl[storage_name]
         rate   = self.production_rate_bph_at(storage_name, 0)
         cap    = STORAGE_CAPACITY_BY_NAME[storage_name]
-        # Subtract draws from all vessels committed to this storage,
-        # whether actively loading or waiting for the berth to open.
+        h = max(horizon_h, vessel_eta_offset)   # look at whichever is further out
+        # Subtract draws from all vessels already committed to this storage.
         committed_statuses = {
             "LOADING",          # actively pumping cargo
             "HOSE_CONNECT_A",   # hoses connected, loading imminent
@@ -3003,8 +3870,33 @@ class Simulation:
             if vv.status in committed_statuses:
                 draw = self.effective_load_cap(vv.name, storage_name)
                 stock = max(0.0, stock - draw)
-        projected = stock + rate * horizon_h
+        projected = stock + rate * h
         return min(projected, cap)
+
+    def hours_to_overflow(self, storage_name):
+        """Hours until storage overflows given current inflow and committed loads.
+
+        A positive value means overflow is `n` hours away.  A very large
+        value (1e9) means no overflow risk within any foreseeable horizon.
+        """
+        cap  = STORAGE_CAPACITY_BY_NAME[storage_name]
+        rate = self.production_rate_bph_at(storage_name, 0)
+        if rate <= 0:
+            return 1e9
+        stock = self.storage_bbl[storage_name]
+        # Credit committed loads — they will remove stock before overflow
+        committed_statuses = {
+            "LOADING", "HOSE_CONNECT_A", "BERTHING_A",
+            "WAITING_BERTH_A", "WAITING_STOCK",
+        }
+        committed_draw = sum(
+            self.effective_load_cap(vv.name, storage_name)
+            for vv in self.vessels
+            if vv.assigned_storage == storage_name
+            and vv.status in committed_statuses
+        )
+        ullage = cap - stock + committed_draw   # committed draws free space
+        return max(0.0, ullage / rate)
 
     def area_travel_hours(self, from_area, to_area):
         """Return the conservative lower-bound travel time in hours
@@ -3020,29 +3912,36 @@ class Simulation:
         """Return a small bias multiplier [0, DISPATCH_BIAS_MAX_FACTOR] that
         shrinks the apparent critical-gap for high-production storages.
         The bias is proportional to the normalised production rate and is
-        only non-zero for Chapel, JasmineS and Westmore (high-rate storages).
+        only non-zero for SanBarth, JasmineS and Westmore (high-rate storages).
         """
         rate = STORAGE_PRODUCTION_RATE_BY_NAME.get(storage_name, 0.0)
         max_rate = max(STORAGE_PRODUCTION_RATE_BY_NAME.values()) or 1.0
-        rate_norm = rate / max_rate           # 0..1 (1 = Chapel/JasmineS)
+        rate_norm = rate / max_rate           # 0..1 (1 = SanBarth/JasmineS)
         return DISPATCH_BIAS_MAX_FACTOR * rate_norm
 
     def storage_dispatch_rank(self, storage_name):
         """Return the risk-first dispatch rank tuple for a storage.
 
-        Lower tuples are more urgent. High-production storages receive the
-        same small bias compression used elsewhere in the dispatcher.
+        Tuple: (overflow_imminent, unsafe_flag, effective_gap, -hours_to_overflow, -stock, name)
+        Lower tuples are more urgent.  The overflow_imminent flag (0/1)
+        promotes any storage within 24 h of overflow above all others
+        regardless of current stock.  Within the same urgency band the
+        production-rate bias compression breaks ties toward high-throughput
+        storages exactly as before.
         """
-        stock = self.storage_bbl[storage_name]
-        crit  = STORAGE_CRITICAL_THRESHOLD_BY_NAME[storage_name]
-        raw_gap = abs(stock - crit)
+        stock    = self.storage_bbl[storage_name]
+        crit     = STORAGE_CRITICAL_THRESHOLD_BY_NAME[storage_name]
+        h2o      = self.hours_to_overflow(storage_name)
+        # Imminent: overflow within 24 h even after committed draws
+        overflow_imminent = 0 if h2o > 24.0 else 1
+        raw_gap  = abs(stock - crit)
         if raw_gap <= DISPATCH_BIAS_FORECAST_BBL:
             bias = self.production_rate_bias_factor(storage_name)
             effective_gap = raw_gap * (1.0 - bias)
         else:
             effective_gap = raw_gap
         unsafe = 0 if stock >= crit else 1
-        return (unsafe, effective_gap, -stock, storage_name)
+        return (overflow_imminent, unsafe, effective_gap, -h2o, -stock, storage_name)
 
     def plan_ac_waiting_assignments(self, vessels, t):
         """Greedy A/C matching for idle or waiting vessels.
@@ -3089,7 +3988,7 @@ class Simulation:
         Two enhancements over the baseline:
 
         1. PRODUCTION-RATE BIAS
-           High-production storages (Chapel / JasmineS / Westmore) receive a
+           High-production storages (SanBarth / JasmineS / Westmore) receive a
            small apparent-gap compression of up to DISPATCH_BIAS_MAX_FACTOR
            (12 %) when within DISPATCH_BIAS_FORECAST_BBL of critical.  This
            means a high-production storage at, say, 35 k bbl above critical
@@ -3309,7 +4208,26 @@ class Simulation:
     def run_daily_preops_storage_reassessment(self, t, day_key):
         """Daily 05:00 Day2+ allocation checkpoint for storage-side daughters.
         Re-evaluates capacity-priority storage assignment without disabling any
-        other allocation/reassessment mechanisms."""
+        other allocation/reassessment mechanisms.
+
+        When ENABLE_VARIABILITY is True, field production rates are perturbed by
+        a small daily factor (cv = PRODUCTION_VARIABILITY_CV) to model the
+        day-to-day variability in field output.  The perturbation is reset each
+        day so there is no cumulative drift.
+        """
+        # ── Apply daily production variability ───────────────────────────────
+        if ENABLE_VARIABILITY:
+            for _sn in STORAGE_NAMES:
+                _base_rate  = STORAGE_PRODUCTION_RATE_BY_NAME[_sn]
+                _pert_rate  = _variability_sample(_base_rate, PRODUCTION_VARIABILITY_CV)
+                self.production_rate_override_by_name[_sn] = _pert_rate
+            if hasattr(self, "_sim_stats"):
+                self._sim_stats.record(
+                    "production_variability", 1.0,
+                    sum(self.production_rate_override_by_name.values()) /
+                    max(1, sum(STORAGE_PRODUCTION_RATE_BY_NAME.values()))
+                )
+
         reassessed = 0
         for vv in self.vessels:
             if vv.status not in {"IDLE_A", "WAITING_STOCK", "WAITING_BERTH_A"}:
@@ -3324,7 +4242,7 @@ class Simulation:
             # A JMP date-shift override sets _jmp_override_locked=True while the
             # vessel waits to load on a specific future date.  Without this guard,
             # the 05:00 preops reassessment silently overwrites the locked storage
-            # (e.g. JasmineS → Chapel) before the target date is reached, causing
+            # (e.g. JasmineS → SanBarth) before the target date is reached, causing
             # the vessel to load from the wrong storage when it wakes.
             if vv.resumption_priority or (vv.resumption_hour is not None and t < vv.resumption_hour):
                 continue
@@ -3361,6 +4279,168 @@ class Simulation:
                 f"Daily 05:00 Day {day_key + 1} storage reassessment: no changes required",
             )
 
+
+    def _bryanston_call_waiting_vessel_serially(self, t, reason="serial-caller",
+                                                mother_name=None):
+        """Primary-mother serial berth caller.
+
+        Originally Bryanston-only; now parametrised by `mother_name` so it can
+        also actively allocate the GreenEagle berth.  When a primary's berth is
+        free and has headroom, it scans for waiting Point-B cargo vessels and
+        claims the single highest-priority one (longest-waiting first; then best
+        export-fill fit; then larger cargo), bypassing daylight / day-lock /
+        priority / nomination / candidate-slot / stale-scheduling gates but
+        keeping all physical guards.
+
+        Why GreenEagle needs this (issue 4 — LAP-004A / Watson):
+        GreenEagle previously used pure first-come self-claim, so a large MTO
+        transient committed to GreenEagle was leapfrogged every day by a rotation
+        of smaller daughters and could sit laden for 1–2+ weeks even when
+        GreenEagle had ample headroom.  A simple "yield" guard at GreenEagle
+        DEADLOCKED (daughters deferred to a transient that still couldn't claim
+        the unallocated berth, so the berth went idle).  Giving GreenEagle the
+        same active serial caller as Bryanston resolves the starvation without the
+        deadlock: the berth, once free, is positively handed to the highest-
+        priority waiter (the long-waiting transient) rather than left for whoever
+        self-claims first.
+
+        Retained physical guards:
+        - mother must be physically at Point B,
+        - mother must not be in any export-busy state,
+        - mother berth must have no physical occupant,
+        - mother must have headroom for the called vessel's cargo.
+
+        MTO accumulation behaviour is not modified here.
+        """
+        mn = mother_name if mother_name is not None else MOTHER_PRIMARY_NAME
+
+        # Physical availability only. Do not use daylight/day-lock/berth-call gates.
+        if not self.mother_is_at_point_b(mn, t):
+            return False
+        if self.export_state.get(mn) in EXPORT_BUSY_STATES:
+            return False
+        if self.mother_berth_current_occupant(mn) is not None:
+            return False
+
+        headroom = max(0.0, self.mother_capacity_bbl(mn) - self.mother_bbl.get(mn, 0.0))
+        if headroom <= 0:
+            return False
+
+        # Include all Point-B waiting/holding statuses that represent a cargo vessel
+        # available to be called by Bryanston.
+        waiting_statuses = {
+            "WAITING_BERTH_B",
+            "WAITING_MOTHER_CAPACITY",
+            "WAITING_FAIRWAY",
+            "WAITING_DAYLIGHT",
+            "ARRIVED_BIA",
+        }
+        candidates = []
+        rejected = []
+        for vv in self.vessels:
+            if vv.status not in waiting_statuses:
+                continue
+            if vv.cargo_bbl <= 0:
+                continue
+            if getattr(vv, "_mto_transient_since_day", None) is not None:
+                # A receiver still in the accumulation phase is not callable — but a
+                # transient that has finished accumulating and is COMMITTED to offload
+                # at Bryanston (assigned_mother == Bryanston and its full cargo fits
+                # the current headroom) is ready to discharge and must be callable,
+                # otherwise the serial caller keeps feeding smaller daughters ahead of
+                # it every day and the large transient never wins the berth (Watson's
+                # 127k queued for Bryanston for two weeks while STM/WDK/etc. were called
+                # ahead of it).  Fit is already re-checked below against headroom.
+                _committed_here = (vv.assigned_mother == mn
+                                   and vv.cargo_bbl <= headroom + 1e-6)
+                if not _committed_here:
+                    rejected.append(f"{vv.name}: MTO transient receiver")
+                    continue
+            elif getattr(vv, "_is_mto_offload", False):
+                rejected.append(f"{vv.name}: active MTO offload")
+                continue
+            if vv.cargo_bbl > headroom + 1e-6:
+                rejected.append(f"{vv.name}: cargo {vv.cargo_bbl:,.0f} > Bryanston headroom {headroom:,.0f}")
+                continue
+            candidates.append(vv)
+
+        if not candidates:
+            # If vessels are visibly waiting but cannot be called, record the real reason.
+            if rejected:
+                day_key = self.point_b_calendar_day_key(t)
+                flag = getattr(self, "_bryanston_serial_block_log", set())
+                hour_key = round(t, 2)
+                key = (day_key, hour_key, mn, tuple(sorted(rejected)))
+                if key not in flag:
+                    self.log_event(
+                        t, "SYSTEM", "BRYANSTON_SERIAL_CALL_BLOCKED",
+                        "Bryanston serial caller found waiting daughters but could not claim: " + "; ".join(rejected),
+                        mother=mn,
+                    )
+                    flag.add(key)
+                    self._bryanston_serial_block_log = flag
+            return False
+
+        def _rank(vv):
+            waited_since = getattr(vv, "_waiting_bia_since", None)
+            if waited_since is None:
+                waited_since = getattr(vv, "arrival_at_b", None)
+            if waited_since is None:
+                waited_since = vv.next_event_time
+            trigger = self.mother_export_trigger_bbl(mn)
+            post_gap = abs(trigger - (self.mother_bbl.get(mn, 0.0) + vv.cargo_bbl))
+            # Serial operating rule: longest waiting first; then best export-fill fit;
+            # then larger cargo; then stable alphabetical tie-breaker.
+            return (waited_since, post_gap, -vv.cargo_bbl, vv.name)
+
+        selected = sorted(candidates, key=_rank)[0]
+
+        # Remove all non-physical Bryanston-only gates. This is the core change.
+        self.mother_berth_free_at[mn] = min(self.mother_berth_free_at.get(mn, 0.0), t)
+        self.mother_available_at[mn] = min(self.mother_available_at.get(mn, 0.0), t)
+        day_key = self.point_b_calendar_day_key(t)
+        self.point_b_day_assigned_mothers.get(day_key, set()).discard(mn)
+        if self._point_b_registered_day.get(mn) == day_key:
+            self._point_b_registered_day.pop(mn, None)
+
+        previous_status = selected.status
+        previous_mother = selected.assigned_mother
+        selected.assigned_mother = mn
+        selected.status = "BERTHING_B"
+        berth_delay = self._berthing_delay()
+        selected.next_event_time = t + berth_delay
+        selected._bryanston_serial_call = True
+        selected._bryanston_serial_call_t = t
+
+        # Reserve Bryanston's berth through expected berthing + hose + discharge + cast-off.
+        hose_hours = self._hose_connect_hours()
+        disch_rate = VESSEL_DISCHARGE_RATE_BPH.get(selected.name)
+        disch_hours = (selected.cargo_bbl / disch_rate) if disch_rate else DISCHARGE_HOURS
+        pump_end = t + berth_delay + hose_hours + disch_hours
+        self.mother_berth_free_at[mn] = max(self.mother_berth_free_at.get(mn, 0.0), _berth_free_at(pump_end))
+
+        self.log_event(
+            t,
+            selected.name,
+            "BERTHING_START_B",
+            f"Bryanston serial caller ({reason}): Bryanston called {selected.name} from {previous_status}; "
+            f"previous mother={previous_mother or 'None'}; all non-physical Bryanston constraints ignored; "
+            f"serial berth reserved until post-discharge/cast-off.",
+            voyage_num=selected.current_voyage,
+            mother=mn,
+        )
+        self.log_event(
+            t,
+            selected.name,
+            "BRYANSTON_SERIAL_CALL",
+            f"Bryanston actively called waiting daughter vessel. Physical checks passed: at BIA, berth free, "
+            f"headroom {headroom:,.0f} bbl, selected cargo {selected.cargo_bbl:,.0f} bbl. "
+            f"Daylight, berth-call, day-lock, priority and stale availability gates bypassed for Bryanston only.",
+            voyage_num=selected.current_voyage,
+            mother=mn,
+        )
+        return True
+
     def maybe_run_daily_preops_storage_reassessment(self, t):
         """Trigger daily storage reassessment at 05:00 from Day 2 onward."""
         wall_hour = round((t + SIM_HOUR_OFFSET) % 24, 2)
@@ -3383,6 +4463,8 @@ class Simulation:
             self._current_t = t   # make current time available to helper methods
             self.maybe_run_daily_preops_storage_reassessment(t)
             self.maybe_run_ac_post_breakwater_reassessment(t)
+            self._maybe_run_multiple_transient_op(t)
+            self._bryanston_call_waiting_vessel_serially(t, reason="pre-state-scan")
 
             # ── Custom vessel join ────────────────────────────────────────────
             # At each timestep check whether any registered custom vessel is due
@@ -3418,7 +4500,7 @@ class Simulation:
                     _perm_str = (
                         ", ".join(sorted(_spec.permitted_storages))
                         if _spec.permitted_storages
-                        else "Chapel, JasmineS (default)"
+                        else "SanBarth, JasmineS (default)"
                     )
                     self.log_event(
                         t, _spec.name, "VESSEL_JOINED",
@@ -3458,7 +4540,7 @@ class Simulation:
             # most urgent available storage must be processed first.  Without
             # this sort, vessels are processed in VESSEL_NAMES order, meaning
             # a smaller vessel (e.g. Woodstock 42k, index 6) grabs the most
-            # urgent storage (Chapel at overflow) before a larger vessel
+            # urgent storage (SanBarth at overflow) before a larger vessel
             # (Watson 85k, index 8) arrives — wasting 49k of drain potential.
             #
             # We split the vessel list into two groups at each t:
@@ -3506,14 +4588,87 @@ class Simulation:
                 if t < v.next_event_time:
                     continue
 
+                # ── Mid-sim dormancy trigger (cargo-aware) ────────────────────
+                # When the dormancy window opens, the vessel must be allowed to
+                # complete any cargo it is carrying before going offline:
+                #
+                #   "Defer" states — vessel has cargo on board or is actively
+                #   loading/discharging; dormancy is deferred until the cargo is
+                #   fully delivered at BIA and the vessel has cast off empty.
+                #
+                #   "Immediate" states — vessel is empty and between voyages
+                #   (returning from BIA, idle at storage, waiting for stock);
+                #   dormancy activates at once with no cargo to protect.
+                #
+                # A `_dormancy_pending` flag is set on the vessel so the
+                # CAST_OFF_B and CAST_OFF_COMPLETE_B handlers can activate
+                # dormancy the moment the current discharge is done.
+                _dorm_h = getattr(v, "dormancy_start_hour", None)
+                if _dorm_h is not None and t >= _dorm_h:
+                    v.dormancy_start_hour = None   # one-shot — don't re-check next tick
+
+                    # States where cargo is present or being processed — defer
+                    _defer_statuses = {
+                        # Loading at storage
+                        "BERTHING_A", "HOSE_CONNECT_A", "LOADING",
+                        "DOCUMENTING", "WAITING_CAST_OFF",
+                        # Sailing toward BIA with cargo
+                        "SAILING_AB", "SAILING_AB_LEG2",
+                        "SAILING_CROSS_BW_AC", "SAILING_BW_TO_FWY",
+                        "WAITING_TIDAL", "WAITING_DAYLIGHT", "WAITING_FAIRWAY",
+                        "SAILING_D_CHANNEL", "SAILING_CH_TO_BW_OUT",
+                        "SAILING_CROSS_BW_OUT",
+                        # At BIA discharging
+                        "BERTHING_B", "HOSE_CONNECT_B", "DISCHARGING",
+                        "WAITING_BERTH_B", "WAITING_MOTHER_CAPACITY",
+                        "WAITING_MOTHER_RETURN",
+                        # Cast-off from storage with cargo
+                        "CAST_OFF",
+                    }
+
+                    if v.cargo_bbl > 0 or v.status in _defer_statuses:
+                        # Vessel has cargo — defer dormancy until after BIA discharge
+                        v._dormancy_pending = True
+                        self.log_event(
+                            t, v.name, "DORMANCY_DEFERRED",
+                            f"Dormancy window opened but vessel has cargo on board "
+                            f"({v.cargo_bbl:,.0f} bbl, status: {v.status}). "
+                            f"Dormancy will activate after current cargo is discharged at BIA. "
+                            f"Resumes: {self.hours_to_dt(getattr(v, '_dormancy_end_hour', 0)).strftime('%Y-%m-%d %H:%M') if getattr(v, '_dormancy_end_hour', None) else 'N/A'}",
+                            voyage_num=v.current_voyage,
+                        )
+                    else:
+                        # Vessel is empty — activate dormancy immediately
+                        _end_h = getattr(v, "_dormancy_end_hour", None)
+                        if _end_h is not None:
+                            v.resumption_hour = _end_h
+                        v.resumption_hold_logged = False
+                        v.status           = "IDLE_A"
+                        v.cargo_bbl        = 0
+                        self.vessel_api[v.name] = 0.0
+                        v.assigned_storage = None
+                        v.assigned_load_hours = None
+                        v.assigned_mother  = None
+                        v.target_point     = "A"
+                        v.next_event_time  = t
+                        self.log_event(
+                            t, v.name, "DORMANCY_ACTIVATED",
+                            f"Mid-sim dormancy window started — vessel idle until "
+                            f"{self.hours_to_dt(v.resumption_hour).strftime('%Y-%m-%d %H:%M') if v.resumption_hour else 'indefinite'} "
+                            f"| priority storage on resumption: {v.resumption_storage}",
+                            voyage_num=v.current_voyage,
+                        )
+
                 if v.status == "PF_LOADING":
                     increment = POINT_F_LOAD_RATE_BPH * TIME_STEP_HOURS
-                    if v.cargo_bbl < v.cargo_capacity:
-                        v.cargo_bbl = min(v.cargo_capacity, v.cargo_bbl + increment)
+                    _pf_cap = getattr(v, "_pf_load_ceiling", None) or v.cargo_capacity
+                    if v.cargo_bbl < _pf_cap:
+                        v.cargo_bbl = min(_pf_cap, v.cargo_bbl + increment)
                     # Ibom API is constant — assign directly rather than blending
                     # from 0.0, which would produce incorrect intermediate values
                     self.vessel_api[v.name] = IBOM_API
-                    if v.cargo_bbl > POINT_F_MIN_TRIGGER_BBL:
+                    _pf_trigger_at = getattr(v, "_pf_load_ceiling", None) or POINT_F_MIN_TRIGGER_BBL
+                    if v.cargo_bbl >= _pf_trigger_at:
                         alternate = self.point_f_other_vessel(v.name)
                         if self.point_f_swap_pending_for != alternate:
                             self.point_f_swap_pending_for = alternate
@@ -3603,8 +4758,8 @@ class Simulation:
                     if v.resumption_priority:
                         _rs = v.resumption_storage
                         if not hasattr(v, '_voyage_assigned') or not v._voyage_assigned:
-                            self.voyage_counter += 1
-                            v.current_voyage = self.voyage_counter
+                            v._vessel_voyage_counter = getattr(v, '_vessel_voyage_counter', 0) + 1
+                            v.current_voyage = v._vessel_voyage_counter
                             v._voyage_assigned = True
                         _rpoint = STORAGE_POINT.get(_rs, "A")
                         _rcap   = self.effective_load_cap(v.name, _rs)
@@ -3678,12 +4833,12 @@ class Simulation:
                             and (self.point_f_active_loader != v.name
                                  or v.target_point != "F")
                             and v.target_point != "F"):
-                        v.target_point = "A"  # load Chapel/JasmineS
+                        v.target_point = "A"  # load SanBarth/JasmineS
 
                     # Only assign a new voyage number on a fresh cycle start.
                     if not hasattr(v, '_voyage_assigned') or not v._voyage_assigned:
-                        self.voyage_counter += 1
-                        v.current_voyage = self.voyage_counter
+                        v._vessel_voyage_counter = getattr(v, '_vessel_voyage_counter', 0) + 1
+                        v.current_voyage = v._vessel_voyage_counter
                         v._voyage_assigned = True
                     cap = v.cargo_capacity   # default; overridden per-storage below
 
@@ -4132,7 +5287,7 @@ class Simulation:
                         # permitted to use already has enough stock.  If so, abort the
                         # berth, release the lock, and let the vessel reassign — this
                         # prevents Starturn/Duke (83/250 bbl/hr) from trapping fast
-                        # vessels for days while Chapel/JasmineS/Westmore are full.
+                        # vessels for days while SanBarth/JasmineS/Westmore are full.
                         if v.dead_stock_wait_start is None:
                             v.dead_stock_wait_start = t
                         wait_so_far = t - v.dead_stock_wait_start
@@ -4265,20 +5420,20 @@ class Simulation:
                     wait = sail_t - t
                     if v.target_point == "D":
                         v.status = "SAILING_D_CHANNEL"
-                        v.next_event_time = sail_t + SAIL_HOURS_D_TO_CH
+                        v.next_event_time = sail_t + _sail_leg(SAIL_HOURS_D_TO_CH, self)
                     elif v.target_point == "F":
                         # Casting off from Ibom (Point F) with partial cargo —
                         # sail directly to BIA (same leg distance as B→F = 3h).
                         # Reuse SAILING_AB_LEG2 which arrives at BIA and triggers
                         # the normal Point B berthing/discharge flow.
                         v.status = "SAILING_AB_LEG2"
-                        v.next_event_time = sail_t + SAIL_HOURS_B_TO_F
+                        v.next_event_time = sail_t + _sail_leg(SAIL_HOURS_B_TO_F, self)
                         # Clear Point F target so return allocation sends to Point A
                         v.target_point = "B"
                     else:
                         # A/C → B: 4-leg route via breakwater and fairway buoy
                         v.status = "SAILING_AB"
-                        v.next_event_time = sail_t + SAIL_HOURS_A_TO_BW
+                        v.next_event_time = sail_t + _sail_leg(SAIL_HOURS_A_TO_BW, self)
                     self.log_event(t, v.name, "CAST_OFF_COMPLETE",
                                    f"Cast-off complete | Departure "
                                    f"{self.hours_to_dt(sail_t).strftime('%H:%M')} (wait {wait:.1f}h)",
@@ -4306,7 +5461,7 @@ class Simulation:
                                        f"({self.tidal_period_label(depart_ch)})",
                                        voyage_num=v.current_voyage)
                     v.status = "SAILING_CH_TO_BW_OUT"
-                    v.next_event_time = depart_ch + SAIL_HOURS_CH_TO_BW_OUT
+                    v.next_event_time = depart_ch + _sail_leg(SAIL_HOURS_CH_TO_BW_OUT, self)
 
                 elif v.status == "SAILING_CH_TO_BW_OUT":
                     # Arrived at Breakwater (outbound) — tidal gate for crossing
@@ -4323,7 +5478,7 @@ class Simulation:
                                        f"({self.tidal_period_label(depart_bw)})",
                                        voyage_num=v.current_voyage)
                     v.status = "SAILING_CROSS_BW_OUT"
-                    v.next_event_time = depart_bw + SAIL_HOURS_CROSS_BW
+                    v.next_event_time = depart_bw + _sail_leg(SAIL_HOURS_CROSS_BW, self)
 
                 elif v.status == "SAILING_CROSS_BW_OUT":
                     # Crossed breakwater outbound — final run to BIA (no tidal gate)
@@ -4332,7 +5487,7 @@ class Simulation:
                                    "Crossed breakwater (0.5h) — clear breakwater, running to BIA (1.5h)",
                                    voyage_num=v.current_voyage)
                     v.status = "SAILING_AB_LEG2"
-                    v.next_event_time = arrival + SAIL_HOURS_BW_TO_B
+                    v.next_event_time = arrival + _sail_leg(SAIL_HOURS_BW_TO_B, self)
 
                 elif v.status == "SAILING_AB":
                     # Arrived at Breakwater (outbound from A/C) — tidal gate to cross
@@ -4349,7 +5504,7 @@ class Simulation:
                                        f"({self.tidal_period_label(depart_bw)})",
                                        voyage_num=v.current_voyage)
                     v.status = "SAILING_CROSS_BW_AC"
-                    v.next_event_time = depart_bw + SAIL_HOURS_CROSS_BW_AC
+                    v.next_event_time = depart_bw + _sail_leg(SAIL_HOURS_CROSS_BW_AC, self)
 
                 elif v.status == "SAILING_CROSS_BW_AC":
                     # Crossed breakwater outbound — run to fairway buoy (daylight only)
@@ -4365,7 +5520,7 @@ class Simulation:
                                        f"{self.hours_to_dt(depart_fwy).strftime('%Y-%m-%d %H:%M')}",
                                        voyage_num=v.current_voyage)
                     v.status = "SAILING_BW_TO_FWY"
-                    v.next_event_time = depart_fwy + SAIL_HOURS_BW_TO_FWY
+                    v.next_event_time = depart_fwy + _sail_leg(SAIL_HOURS_BW_TO_FWY, self)
 
                 elif v.status == "SAILING_BW_TO_FWY":
                     # Arrived Fairway Buoy outbound (A/C → BIA).
@@ -4376,7 +5531,7 @@ class Simulation:
                     arrival    = t
                     arrival_hod = (arrival + SIM_HOUR_OFFSET) % 24   # wall-clock hour-of-day
                     self.log_event(arrival, v.name, "ARRIVED_FAIRWAY",
-                                   "Reached Fairway Buoy (2h from breakwater) — running to BIA (2h)",
+                                   f"Reached Fairway Buoy — running to BIA (2h) | {v.cargo_bbl:,.0f} bbl on board",
                                    voyage_num=v.current_voyage)
                     if arrival_hod >= FAIRWAY_HOLD_HOUR:
                         # Arrived after 19:00 wall-clock — hold until next daylight
@@ -4390,7 +5545,7 @@ class Simulation:
                         # Arrived at or before 19:00 — proceed directly, no hold
                         depart_bia = arrival
                     v.status = "SAILING_AB_LEG2"
-                    v.next_event_time = depart_bia + SAIL_HOURS_FWY_TO_B
+                    v.next_event_time = depart_bia + _sail_leg(SAIL_HOURS_FWY_TO_B, self)
 
                 elif v.status == "SAILING_AB_LEG2":
                     arrival = t
@@ -4420,7 +5575,7 @@ class Simulation:
                                        voyage_num=v.current_voyage)
                         v.next_event_time = next_recheck
                     else:
-                        day_key = int(arrival // 24)
+                        day_key = self.point_b_calendar_day_key(arrival)
                         candidate_by_mother = {
                             mother_name: (start, berth_t, mother_name)
                             for start, berth_t, mother_name in candidates
@@ -4493,6 +5648,7 @@ class Simulation:
                                     )
                                     if selected is None:
                                         selected = (arrival, arrival, _ddo_mother)
+                                    # Lock deferred to pump-start
                                     self.log_event(
                                         arrival, v.name, "MOTHER_PRIORITY_ASSIGNMENT",
                                         f"Discharge override [{v.voyage_code}]: forced to "
@@ -4500,13 +5656,13 @@ class Simulation:
                                         voyage_num=v.current_voyage, mother=_ddo_mother,
                                     )
                                 else:
-                                    # Mother not at BIA (e.g. at export) — wait for hourly recheck
+                                    # Mother not at BIA (e.g. at export) — wait for 30-min rescan
                                     v.next_event_time = self.next_daylight_hourly_berth_check(arrival, point="B")
                                     self.log_event(
                                         arrival, v.name, "WAITING_BERTH_B",
                                         f"Discharge override [{v.voyage_code}]: target {_ddo_mother} "
                                         f"not available on {self.hours_to_dt(arrival).strftime('%Y-%m-%d')}; "
-                                        f"hourly reassessment at "
+                                        f"rescan in 30 min at "
                                         f"{self.hours_to_dt(v.next_event_time).strftime('%Y-%m-%d %H:%M')}",
                                         voyage_num=v.current_voyage, mother=_ddo_mother,
                                     )
@@ -4527,6 +5683,92 @@ class Simulation:
                                     selected_meta["mother"],
                                 )
 
+                        # ── MTO queued discharger override ───────────────────
+                        # If this vessel was flagged at startup as a queued MTO
+                        # discharger (_mto_target_vessel set), route it to the
+                        # transient vessel instead of a primary mother.
+                        _mto_tv_attr = getattr(v, "_mto_target_vessel", None)
+                        if _mto_tv_attr:
+                            # Find the transient receiver vessel
+                            _recv_v = next(
+                                (vv for vv in self.vessels if vv.name == _mto_tv_attr
+                                 and getattr(vv, "_mto_transient_since_day", None) is not None),
+                                None
+                            )
+                            if _recv_v is not None:
+                                # Check receiver has headroom for this discharger
+                                _trn_cap   = MTO_TRANSIENT_CAPACITY_BBL.get(
+                                    _recv_v.name, _recv_v.cargo_capacity)
+                                _headroom  = max(0.0, _trn_cap - _recv_v.cargo_bbl)
+                                _berth_free = getattr(_recv_v, "_mto_berth_free_at", 0.0)
+
+                                if _headroom >= v.cargo_bbl and _berth_free <= arrival:
+                                    # Execute the MTO transfer immediately
+                                    _dis_api   = self.vessel_api.get(v.name, 0.0)
+                                    _trn_api   = self.vessel_api.get(_recv_v.name, 0.0)
+                                    _trn_old   = _recv_v.cargo_bbl
+                                    _xfer      = min(v.cargo_bbl, _headroom)
+                                    _new_trn   = _trn_old + _xfer
+                                    if _new_trn > 0:
+                                        self.vessel_api[_recv_v.name] = (
+                                            (_trn_old * _trn_api + _xfer * _dis_api) / _new_trn
+                                        )
+                                    _recv_v.cargo_bbl = _new_trn
+                                    _recv_v._mto_parcels_received = getattr(
+                                        _recv_v, "_mto_parcels_received", 0) + 1
+
+                                    _mto_rate   = VESSEL_DISCHARGE_RATE_BPH.get(v.name)
+                                    _pump_h     = (_xfer / _mto_rate) if _mto_rate else DISCHARGE_HOURS
+                                    _cast_t     = self.next_cast_off_window(
+                                        arrival + BERTHING_DELAY_HOURS + HOSE_CONNECTION_HOURS + _pump_h
+                                    )
+                                    _end_t      = _cast_t + CAST_OFF_HOURS
+                                    _recv_v._mto_berth_free_at = _end_t
+
+                                    v.cargo_bbl       = 0
+                                    self.vessel_api[v.name] = 0.0
+                                    v.status          = "CAST_OFF_B"
+                                    v.next_event_time = _end_t
+                                    v._mto_target_vessel = None  # clear flag
+
+                                    # Increment parcel counter on receiver
+                                    _recv_v._mto_parcels_received = getattr(
+                                        _recv_v, "_mto_parcels_received", 0) + 1
+
+                                    # After this discharge the receiver's transient
+                                    # role is complete — clear flag so the auto MTO
+                                    # gate no longer sees it as an active transient,
+                                    # preventing duplicate Day 2 nominations.
+                                    _recv_v._mto_transient_since_day = None
+
+                                    _recv_v.status          = "WAITING_BERTH_B"
+                                    _recv_v.next_event_time = self.next_daylight_hourly_berth_check(
+                                        arrival, point="B"
+                                    )
+
+                                    self.log_event(
+                                        arrival, v.name, "MTO_DISCHARGE_TO_TRANSIENT",
+                                        f"[MTO queued arrival] {v.name} → {_recv_v.name}: "
+                                        f"{_xfer:,.0f} bbl | pump {_pump_h:.1f}h | "
+                                        f"cast-off {self.hours_to_dt(_end_t).strftime('%H:%M')}",
+                                        voyage_num=v.current_voyage,
+                                    )
+                                    continue  # skip normal mother assignment
+                                else:
+                                    # Receiver berth busy — wait until it frees
+                                    v.status          = "WAITING_BERTH_B"
+                                    v.next_event_time = max(arrival, _berth_free) + 0.5
+                                    v.assigned_mother = None
+                                    self.log_event(
+                                        arrival, v.name, "WAITING_BERTH_B",
+                                        f"MTO queued for {_recv_v.name}; transient berth busy until "
+                                        f"{self.hours_to_dt(_berth_free).strftime('%H:%M')} — waiting",
+                                        voyage_num=v.current_voyage,
+                                    )
+                                    continue
+                            # If receiver not found or no longer transient, fall through to normal logic
+                            v._mto_target_vessel = None
+
                         start, berth_t, selected_mother = selected
                         v.assigned_mother = selected_mother
                         if start > arrival + 0.01:
@@ -4536,7 +5778,7 @@ class Simulation:
                                 arrival,
                                 v.name,
                                 "WAITING_BERTH_B",
-                                f"Assigned to {selected_mother}; hourly reassessment until berth opens "
+                                f"Assigned to {selected_mother}; rescan every 30 min until berth opens "
                                 f"(earliest {self.hours_to_dt(start).strftime('%Y-%m-%d %H:%M')})",
                                 voyage_num=v.current_voyage,
                                 mother=selected_mother,
@@ -4545,9 +5787,8 @@ class Simulation:
                             v.status = "BERTHING_B"
                             _disch_rate_3 = VESSEL_DISCHARGE_RATE_BPH.get(v.name)
                             _disch_hrs_3 = (v.cargo_bbl / _disch_rate_3) if _disch_rate_3 else DISCHARGE_HOURS
-                            _discharge_end = (
-                                start + BERTHING_DELAY_HOURS + HOSE_CONNECTION_HOURS + _disch_hrs_3
-                            )
+                            _pump_end_3   = start + BERTHING_DELAY_HOURS + HOSE_CONNECTION_HOURS + _disch_hrs_3
+                            _discharge_end = _berth_free_at(_pump_end_3)
                             self.mother_berth_free_at[selected_mother] = max(
                                 self.mother_berth_free_at[selected_mother], _discharge_end
                             )
@@ -4577,6 +5818,238 @@ class Simulation:
 
                 elif v.status == "WAITING_BERTH_B":
                     decision_t = t
+
+                    # ── MTO transient vessel: opportunistic offload priority ───
+                    # A transient vessel tries to berth at a primary mother on
+                    # every hourly check — as soon as a window opens it takes it.
+                    # It does NOT wait for "day+1"; the capacity ceiling and parcel
+                    # count control only when MORE shuttles can top it up, never
+                    # when it may discharge.  Priority is absolute: it displaces
+                    # any incumbent at the best available berth.
+                    _mto_since = getattr(v, "_mto_transient_since_day", None)
+                    # Belt-and-suspenders: a vessel carrying at least 20k above
+                    # its standard cargo_capacity and within its MTO_TRANSIENT_CAPACITY_BBL
+                    # should be treated as an MTO transient.  Smaller overloads are
+                    # regarded as normal voyages that have exceeded nominal capacity.
+                    if (_mto_since is None
+                            and v.cargo_bbl >= v.cargo_capacity + 20_000
+                            and v.cargo_bbl <= MTO_TRANSIENT_CAPACITY_BBL.get(
+                                v.name, v.cargo_capacity)):
+                        v._mto_transient_since_day = 0   # treat as Day-0 transient
+                        v._is_mto_offload          = True
+                        v._mto_parcels_received    = getattr(
+                            v, "_mto_parcels_received", 1)
+                        _mto_since = 0
+                    if _mto_since is not None:
+                        # Guard: last MTO discharger must have cast off before the
+                        # transient seeks a mother berth.  Day-1 startup receivers
+                        # have _mto_berth_free_at=0.0 so this check is naturally
+                        # exempt for them.  Runtime MTO sets _mto_berth_free_at=
+                        # transfer_end_t; next_event_time is also transfer_end_t so
+                        # this only fires if next_event_time was advanced earlier.
+                        _mto_last_xfr_done = getattr(v, "_mto_berth_free_at", 0.0)
+                        if t < _mto_last_xfr_done:
+                            v.next_event_time = self.next_daylight_hourly_berth_check(
+                                _mto_last_xfr_done, point="B"
+                            )
+                            continue
+                        # Find the best primary mother — any mother with ANY space.
+                        # The old guard (space < v.cargo_bbl) was wrong: it froze
+                        # vessels indefinitely when no mother had full-cargo space.
+                        # The transient discharges WHATEVER FITS, not necessarily all
+                        # at once. Transfer is clamped at HOSE_CONNECT_B to available
+                        # space so the mother never overflows.
+                        _mto_best_mother = None
+                        _mto_best_start  = None
+                        # Full-fit preference: a mother whose headroom can accept the
+                        # ENTIRE transient cargo.  An MTO discharge is hard-aborted
+                        # (MOTHER_CAPACITY_ABORT) when cargo > headroom — it never
+                        # partial-fills — so picking the earliest-slot mother without
+                        # regard to headroom can send the transient to a near-full
+                        # mother that aborts it every tick (e.g. Watson WTS-003A's 127k
+                        # repeatedly aborting at a 50k-headroom GreenEagle on 10–11 Jun
+                        # while Bryanston sat with ~475k free).  Prefer a mother that
+                        # can take the whole cargo; only fall back to an insufficient-
+                        # headroom mother when none can (preserving the original intent
+                        # of not waiting indefinitely when every mother is near-full).
+                        _mto_fit_mother = None
+                        _mto_fit_start  = None
+                        # Queue fallback: best primary that HAS space but whose berth
+                        # is currently occupied.  Used only when no berth is claimable
+                        # right now, so the transient waits in line for the soonest
+                        # cast-off instead of spinning forever and never offloading.
+                        _mto_queue_mother = None
+                        _mto_queue_start  = None
+                        _mto_fit_queue_mother = None
+                        _mto_fit_queue_start  = None
+                        for _mn in MOTHER_NAMES:
+                            if not self.mother_is_at_point_b(_mn, decision_t):
+                                continue
+                            # Skip mothers in any export state — DOC/SAILING means
+                            # departing; HOSE/IN_PORT means physically at the export
+                            # terminal and unavailable for daughter discharge.
+                            if self.export_state.get(_mn) in EXPORT_BUSY_STATES:
+                                continue
+                            _space = self.mother_capacity_bbl(_mn) - self.mother_bbl[_mn]
+                            # Any positive headroom suffices — the HOSE_CONNECT_B
+                            # handler clamps transfer to available space.
+                            # Requiring full-cargo space caused MTO receivers to wait
+                            # indefinitely when mothers were always near-full.
+                            if _space <= 0:
+                                continue
+                            _slot = self.next_berthing_window(
+                                max(decision_t,
+                                    self.mother_berth_free_at[_mn],
+                                    self.mother_available_at[_mn]),
+                                point="B",
+                            )
+                            if self._point_b_mother_assigned_on_day(_mn, _slot):
+                                continue
+                            # Do not target a mother whose berth is already
+                            # physically occupied by another actor mid-operation
+                            # (BERTHING_B / HOSE_CONNECT_B / DISCHARGING / CAST_OFF_B).
+                            # The MTO priority-berth path below displaces the
+                            # incumbent unconditionally; if that incumbent is mid-
+                            # cycle it gets bumped, re-berthed by the MT SanBarth
+                            # idle-daughter daylight call, then bumped again next
+                            # hour — an all-day berth ping-pong that completes no
+                            # discharge and monopolises the berth.  Consistent with
+                            # the concurrent-berth guard's rule of never interrupting
+                            # an active operation, wait for the current occupant to
+                            # finish rather than displacing it.
+                            _occ_mn = self.mother_berth_current_occupant(_mn)
+                            if _occ_mn is not None and getattr(_occ_mn, "name", None) != v.name:
+                                # Berth physically occupied.  Record this mother as a
+                                # QUEUE fallback (soonest cast-off) but do not target it
+                                # for an immediate claim — the transient must not displace
+                                # an active incumbent (that caused the day-7 berth ping-pong).
+                                # The queue fallback below lets the transient wait its turn
+                                # rather than skip the only space-having primary every tick
+                                # and never offload its accumulated cargo.
+                                _occ_free = self.next_berthing_window(
+                                    max(decision_t,
+                                        getattr(_occ_mn, "next_event_time", decision_t) or 0.0,
+                                        self.mother_berth_free_at.get(_mn, 0.0)),
+                                    point="B",
+                                )
+                                if _mto_queue_start is None or _occ_free < _mto_queue_start:
+                                    _mto_queue_start  = _occ_free
+                                    _mto_queue_mother = _mn
+                                # Track the full-fit subset of queue candidates too.
+                                if _space >= v.cargo_bbl and (
+                                        _mto_fit_queue_start is None
+                                        or _occ_free < _mto_fit_queue_start):
+                                    _mto_fit_queue_start  = _occ_free
+                                    _mto_fit_queue_mother = _mn
+                                continue
+                            if _mto_best_start is None or _slot < _mto_best_start:
+                                _mto_best_start  = _slot
+                                _mto_best_mother = _mn
+                            # Track the full-fit subset of immediate candidates.
+                            if _space >= v.cargo_bbl and (
+                                    _mto_fit_start is None or _slot < _mto_fit_start):
+                                _mto_fit_start  = _slot
+                                _mto_fit_mother = _mn
+                        # Prefer a mother that can accept the entire cargo (no abort).
+                        if _mto_fit_mother is not None:
+                            _mto_best_mother, _mto_best_start = _mto_fit_mother, _mto_fit_start
+                        if _mto_fit_queue_mother is not None:
+                            _mto_queue_mother, _mto_queue_start = _mto_fit_queue_mother, _mto_fit_queue_start
+                        # If the only immediately-claimable mother CANNOT take the full
+                        # cargo (it would just MOTHER_CAPACITY_ABORT every tick) but a
+                        # full-fit mother is reachable by queueing for its berth, do not
+                        # claim the insufficient one — fall through to the queue branch
+                        # so the transient waits for the mother that can actually accept
+                        # it.  This is what lets Watson's 127k queue for Bryanston
+                        # (~475k free) instead of abort-looping at a near-full GreenEagle,
+                        # which in turn frees GreenEagle for a smaller daughter (Woodstock).
+                        _immediate_is_undersized = (
+                            _mto_best_mother is not None
+                            and _mto_fit_mother is None
+                            and (self.mother_capacity_bbl(_mto_best_mother)
+                                 - self.mother_bbl[_mto_best_mother]) < v.cargo_bbl
+                        )
+                        if _immediate_is_undersized and _mto_fit_queue_mother is not None:
+                            _mto_best_mother = None   # force the queue-for-full-fit path
+                        if _mto_best_mother is not None:
+                            # Displace incumbent and release berth lock first
+                            self._displace_incumbent_at_mother(_mto_best_mother, decision_t)
+                            # Recompute start from NOW after displacement cleared the lock
+                            _mto_actual_start = self.next_berthing_window(
+                                max(decision_t,
+                                    self.mother_available_at.get(_mto_best_mother, 0.0)),
+                                point="B",
+                            )
+                            v.assigned_mother = _mto_best_mother
+                            # Lock deferred to pump-start.  Do NOT reserve
+                            # mother_berth_free_at here: this is only a speculative
+                            # berth *claim*.  If the concurrent-berth guard aborts
+                            # this attempt before pumping starts, a reservation
+                            # written here is never rolled back and orphans the
+                            # mother's berth (ratcheting forward on every retry),
+                            # which starves genuinely eligible daughters.  The real
+                            # reservation is established at DISCHARGE_START via
+                            # _point_b_register_mother_start + _enforce_exclusive_day_at_mother
+                            # once cargo physically flows.  Pre-pump occupancy is
+                            # already enforced by mother_berth_current_occupant and
+                            # the concurrent-berth guard.
+                            v.status = "BERTHING_B"
+                            v.next_event_time = _mto_actual_start + BERTHING_DELAY_HOURS
+                            v._mto_transient_since_day  = None   # clear transient flag
+                            v._mto_offload_wait_since   = None   # claimed — clear stuck timer
+                            v._mto_parcels_received     = 0      # reset parcel counter
+                            v._is_mto_offload           = True   # mark for voyage code suffix
+                            _cur_day_key = int((decision_t + SIM_HOUR_OFFSET) // 24)
+                            self.log_event(
+                                decision_t, v.name, "MTO_TRANSIENT_PRIORITY_BERTH",
+                                f"[MTO] Transient offloading at {_mto_best_mother} "
+                                f"(Day {_cur_day_key+1}) — {v.cargo_bbl:,.0f} bbl on board | "
+                                f"berth at {self.hours_to_dt(_mto_best_start).strftime('%H:%M')}",
+                                voyage_num=v.current_voyage, mother=_mto_best_mother,
+                            )
+                            continue
+                        else:
+                            # No berth claimable right now.  If a primary with space
+                            # exists but is currently occupied, QUEUE for the one that
+                            # frees soonest: assign the transient and wait for the
+                            # incumbent to cast off, then berth on a later check (no
+                            # displacement).  Without this an MTO transient whose only
+                            # space-having primary is continuously busy spins forever
+                            # and never offloads its accumulated cargo (e.g. AMY-002
+                            # holding 92k while Bryanston stays occupied and GreenEagle
+                            # is full).
+                            if _mto_queue_mother is not None:
+                                # Track how long this transient has been unable to
+                                # claim any berth.  Only escalate to a queue commitment
+                                # once it has been stuck past the threshold, so routine
+                                # short waits do not perturb normal berth scheduling.
+                                if getattr(v, "_mto_offload_wait_since", None) is None:
+                                    v._mto_offload_wait_since = decision_t
+                                _stuck_h = decision_t - v._mto_offload_wait_since
+                                if _stuck_h >= MTO_OFFLOAD_STUCK_ESCALATION_HOURS:
+                                    v.assigned_mother = _mto_queue_mother
+                                    v.next_event_time = self.next_daylight_hourly_berth_check(
+                                        _mto_queue_start, point="B")
+                                    self.log_event(
+                                        decision_t, v.name, "WAITING_BERTH_B",
+                                        f"[MTO] Transient {v.cargo_bbl:,.0f} bbl stuck "
+                                        f"{_stuck_h:.0f}h — queueing for {_mto_queue_mother} "
+                                        f"(berth occupied; awaiting cast-off, recheck "
+                                        f"{self.hours_to_dt(v.next_event_time).strftime('%Y-%m-%d %H:%M')})",
+                                        voyage_num=v.current_voyage, mother=_mto_queue_mother,
+                                    )
+                                    continue
+                            # No qualifying mother yet — recheck every TIME_STEP_HOURS
+                            # during daylight so we catch returning mothers immediately
+                            # rather than waiting up to an hour.
+                            _wall_now = (decision_t + SIM_HOUR_OFFSET) % 24
+                            if DAYLIGHT_START <= _wall_now < DAYLIGHT_END:
+                                _next_mto = decision_t + TIME_STEP_HOURS
+                            else:
+                                _next_mto = self.next_daylight_hourly_berth_check(decision_t, point="B")
+                            v.next_event_time = _next_mto
+                            continue
+
                     _, candidates = self.point_b_candidate_slots(v, decision_t)
                     if not candidates:
                         next_recheck = self.next_daylight_hourly_berth_check(decision_t, point="B")
@@ -4585,13 +6058,13 @@ class Simulation:
                             decision_t,
                             v.name,
                             "WAITING_MOTHER_CAPACITY",
-                            f"No Point B mother currently feasible; hourly reassessment at "
+                            f"No Point B mother currently feasible; rescan in 30 min at "
                             f"{self.hours_to_dt(next_recheck).strftime('%Y-%m-%d %H:%M')}",
                             voyage_num=v.current_voyage,
                         )
                         continue
 
-                    day_key = int(decision_t // 24)
+                    day_key = self.point_b_calendar_day_key(decision_t)
                     if STARTUP_DAY_DISABLE_POINT_B_PRIORITY and day_key == 0:
                         nominated_mother = STARTUP_DAY_POINT_B_MANUAL_NOMINATIONS.get(v.name)
                         if nominated_mother not in {m for _, _, m in candidates}:
@@ -4652,6 +6125,7 @@ class Simulation:
                                     (x for x in candidates if x[2] == _ddo_mother),
                                     (decision_t, decision_t, _ddo_mother),
                                 )
+                                # Lock deferred to pump-start
                                 if _ddo_mother != v.assigned_mother:
                                     self.log_event(
                                         decision_t, v.name, "MOTHER_PRIORITY_ASSIGNMENT",
@@ -4666,7 +6140,7 @@ class Simulation:
                                 self.log_event(
                                     decision_t, v.name, "WAITING_BERTH_B",
                                     f"Discharge override [{v.voyage_code}]: awaiting {_ddo_mother} — "
-                                    f"not currently feasible; next reassessment "
+                                    f"not currently feasible; next rescan "
                                     f"{self.hours_to_dt(next_recheck).strftime('%Y-%m-%d %H:%M')}",
                                     voyage_num=v.current_voyage, mother=_ddo_mother,
                                 )
@@ -4686,12 +6160,15 @@ class Simulation:
                             )
 
                     start, berth_t, selected_mother = selected
-                    if selected_mother != v.assigned_mother and v.assigned_mother in MOTHER_NAMES:
+                    _prev_mother = v.assigned_mother
+                    _mother_changed = selected_mother != _prev_mother and _prev_mother in MOTHER_NAMES
+                    if _mother_changed:
                         self.log_event(
                             decision_t,
                             v.name,
                             "MOTHER_PRIORITY_ASSIGNMENT",
-                            f"Hourly Point B reassessment reallocated mother {v.assigned_mother} -> {selected_mother}",
+                            f"Point B rescan reallocated: {_prev_mother} → {selected_mother} "
+                            f"(berth freed — earlier slot available)",
                             voyage_num=v.current_voyage,
                             mother=selected_mother,
                         )
@@ -4700,32 +6177,166 @@ class Simulation:
                     if start > decision_t + 0.01:
                         next_recheck = self.next_daylight_hourly_berth_check(decision_t, point="B")
                         v.next_event_time = next_recheck
-                        self.log_event(
-                            decision_t,
-                            v.name,
-                            "WAITING_BERTH_B",
-                            f"Awaiting berth at {selected_mother}; earliest {self.hours_to_dt(start).strftime('%Y-%m-%d %H:%M')}, "
-                            f"next reassessment {self.hours_to_dt(next_recheck).strftime('%Y-%m-%d %H:%M')}",
-                            voyage_num=v.current_voyage,
-                            mother=selected_mother,
-                        )
+                        # Only log when mother changed or this is the first check
+                        # (half-step scanning generates too many identical log entries)
+                        _last_log_start = getattr(v, "_wb_last_logged_start", None)
+                        _last_log_mother = getattr(v, "_wb_last_logged_mother", None)
+                        if _mother_changed or _last_log_start != start or _last_log_mother != selected_mother:
+                            self.log_event(
+                                decision_t,
+                                v.name,
+                                "WAITING_BERTH_B",
+                                f"Awaiting berth at {selected_mother}; earliest {self.hours_to_dt(start).strftime('%Y-%m-%d %H:%M')}, "
+                                f"next rescan {self.hours_to_dt(next_recheck).strftime('%Y-%m-%d %H:%M')}",
+                                voyage_num=v.current_voyage,
+                                mother=selected_mother,
+                            )
+                            v._wb_last_logged_start  = start
+                            v._wb_last_logged_mother = selected_mother
                         continue
+
+                    # ── Yield a primary berth to a higher-priority MTO transient ────
+                    # Applies at EVERY primary (Bryanston AND GreenEagle): a smaller
+                    # daughter must not self-claim a primary berth the instant it
+                    # frees ahead of a large MTO consolidation that is assigned to
+                    # that mother, ready, fits the headroom, and has waited at least
+                    # as long.  The guard also bumps the transient's next_event_time
+                    # to NOW so it re-evaluates and claims the freed berth this tick
+                    # (it does not depend on the Bryanston-only serial caller), so it
+                    # is safe at GreenEagle too.  Restricting it to Bryanston was the
+                    # gap that let Laphroaig's 133k MTO offload (LAP-004A) be
+                    # leapfrogged at GreenEagle by a daily rotation of smaller
+                    # daughters and sit laden ~11 days.
+                    if (selected_mother == MOTHER_PRIMARY_NAME
+                            and getattr(v, "_mto_transient_since_day", None) is None):
+                        _bry_hr = max(0.0, self.mother_capacity_bbl(selected_mother)
+                                      - self.mother_bbl.get(selected_mother, 0.0))
+                        _v_wait = (getattr(v, "arrival_at_b", None)
+                                   or getattr(v, "_waiting_bia_since", None) or decision_t)
+                        _mto_ahead = None
+                        for _mt in self.vessels:
+                            if _mt is v or getattr(_mt, "_mto_transient_since_day", None) is None:
+                                continue
+                            if _mt.assigned_mother != selected_mother:
+                                continue
+                            if _mt.status not in {"WAITING_BERTH_B", "WAITING_MOTHER_CAPACITY"}:
+                                continue
+                            if _mt.cargo_bbl <= 0 or _mt.cargo_bbl > _bry_hr + 1e-6:
+                                continue
+                            if decision_t < getattr(_mt, "_mto_berth_free_at", 0.0):
+                                continue   # transient's inbound transfer not yet complete
+                            _mt_wait = (getattr(_mt, "arrival_at_b", None)
+                                        or getattr(_mt, "_waiting_bia_since", None) or decision_t)
+                            if _mt_wait <= _v_wait + 1e-6:
+                                _mto_ahead = _mt
+                                break
+                        if _mto_ahead is not None:
+                            _mto_ahead.next_event_time = min(
+                                getattr(_mto_ahead, "next_event_time", decision_t) or decision_t,
+                                decision_t)
+                            next_recheck = self.next_daylight_hourly_berth_check(decision_t, point="B")
+                            v.next_event_time = next_recheck
+                            self.log_event(
+                                decision_t, v.name, "WAITING_BERTH_B",
+                                f"Yielding {selected_mother} berth to committed MTO transient "
+                                f"{_mto_ahead.name} ({_mto_ahead.cargo_bbl:,.0f} bbl, waiting longer) — "
+                                f"next rescan {self.hours_to_dt(next_recheck).strftime('%Y-%m-%d %H:%M')}",
+                                voyage_num=v.current_voyage, mother=selected_mother,
+                            )
+                            continue
+
+                    # ── Issue-4 headroom reservation (both primaries) ───────────
+                    # A large MTO consolidation committed to this mother can be
+                    # starved not by losing the berth race but by HEADROOM erosion:
+                    # while it waits, a rotation of smaller daughters berths the
+                    # mother and fills it, so by the time the berth frees the
+                    # transient no longer fits and is bumped to the other mother —
+                    # repeatedly, for 1–2+ weeks (Watson/Sherlock 147k).  Unlike the
+                    # Bryanston-only yield above (which only fires when the transient
+                    # already fits *now*), this guard protects the transient's future
+                    # slot: if berthing this smaller daughter would drop the mother's
+                    # headroom below a waiting committed transient's cargo, the
+                    # daughter must not consume that headroom here.  It defers — its
+                    # own next rescan will route it to the other primary (or it waits
+                    # briefly) — leaving room for the transient to berth via its
+                    # normal handler.  No berth hand-off is required, so there is no
+                    # deadlock (the failure mode of generalising the yield/serial
+                    # caller to GreenEagle).  Applies only when the OTHER primary can
+                    # take this daughter, so we never freeze a daughter that has
+                    # nowhere else to go.
+                    if (selected_mother in (MOTHER_PRIMARY_NAME, MOTHER_SECONDARY_NAME)
+                            and getattr(v, "_mto_transient_since_day", None) is None
+                            and v.cargo_bbl > 0):
+                        _sel_hr = max(0.0, self.mother_capacity_bbl(selected_mother)
+                                      - self.mother_bbl.get(selected_mother, 0.0))
+                        _hr_after = _sel_hr - v.cargo_bbl
+                        _blocking_transient = None
+                        for _mt in self.vessels:
+                            if _mt is v or getattr(_mt, "_mto_transient_since_day", None) is None:
+                                continue
+                            if _mt.assigned_mother != selected_mother:
+                                continue
+                            if _mt.status not in {"WAITING_BERTH_B", "WAITING_MOTHER_CAPACITY"}:
+                                continue
+                            if _mt.cargo_bbl <= 0:
+                                continue
+                            if decision_t < getattr(_mt, "_mto_berth_free_at", 0.0):
+                                continue   # transient's inbound transfer not complete
+                            # The transient currently fits, but would NOT after this
+                            # daughter discharges → this daughter is eroding its slot.
+                            if (_mt.cargo_bbl <= _sel_hr + 1e-6
+                                    and _mt.cargo_bbl > _hr_after + 1e-6):
+                                _blocking_transient = _mt
+                                break
+                        if _blocking_transient is not None:
+                            # Only defer if the OTHER primary can physically take this
+                            # daughter now (at BIA, not export-busy, fits) — otherwise
+                            # let the daughter proceed rather than strand it.
+                            _other = (MOTHER_SECONDARY_NAME
+                                      if selected_mother == MOTHER_PRIMARY_NAME
+                                      else MOTHER_PRIMARY_NAME)
+                            _other_ok = (
+                                self.mother_is_at_point_b(_other, decision_t)
+                                and self.export_state.get(_other) not in EXPORT_BUSY_STATES
+                                and (self.mother_capacity_bbl(_other)
+                                     - self.mother_bbl.get(_other, 0.0)) >= v.cargo_bbl - 1e-6
+                            )
+                            if _other_ok:
+                                # Nudge the transient to act now and send this daughter
+                                # to the other primary on its next rescan.
+                                _blocking_transient.next_event_time = min(
+                                    getattr(_blocking_transient, "next_event_time", decision_t)
+                                    or decision_t, decision_t)
+                                v.assigned_mother = _other
+                                _nr = self.next_daylight_hourly_berth_check(decision_t, point="B")
+                                v.next_event_time = _nr
+                                self.log_event(
+                                    decision_t, v.name, "WAITING_BERTH_B",
+                                    f"Reserving {selected_mother} headroom for committed MTO "
+                                    f"transient {_blocking_transient.name} "
+                                    f"({_blocking_transient.cargo_bbl:,.0f} bbl) — rerouting to "
+                                    f"{_other}; next rescan "
+                                    f"{self.hours_to_dt(_nr).strftime('%Y-%m-%d %H:%M')}",
+                                    voyage_num=v.current_voyage, mother=selected_mother,
+                                )
+                                continue
 
                     v.status = "BERTHING_B"
                     _disch_rate_4 = VESSEL_DISCHARGE_RATE_BPH.get(v.name)
                     _disch_hrs_4 = (v.cargo_bbl / _disch_rate_4) if _disch_rate_4 else DISCHARGE_HOURS
-                    _discharge_end = (
-                        start + BERTHING_DELAY_HOURS + HOSE_CONNECTION_HOURS + _disch_hrs_4
-                    )
+                    _berth_delay_4 = self._berthing_delay()
+                    _hose_hrs_4    = self._hose_connect_hours()
+                    _pump_end_4   = start + _berth_delay_4 + _hose_hrs_4 + _disch_hrs_4
+                    _discharge_end = _berth_free_at(_pump_end_4)
                     self.mother_berth_free_at[selected_mother] = max(
                         self.mother_berth_free_at[selected_mother], _discharge_end
                     )
-                    v.next_event_time = start + BERTHING_DELAY_HOURS
+                    v.next_event_time = start + _berth_delay_4
                     self.log_event(
                         start,
                         v.name,
                         "BERTHING_START_B",
-                        f"Berthing at {selected_mother} (30 min procedure)",
+                        f"Berthing at {selected_mother} ({_berth_delay_4*60:.0f} min procedure)",
                         voyage_num=v.current_voyage,
                         mother=selected_mother,
                     )
@@ -4750,19 +6361,62 @@ class Simulation:
                             mother=v.assigned_mother,
                         )
                         continue
+                    # Gate: mothers require full return + fendering before berthing.
+                    # mother_available_at = return_arrival + 2h fender.
+                    _fender_at = self.mother_available_at.get(v.assigned_mother, 0.0)
+                    if t < _fender_at:
+                        _next_chk = self.next_daylight_hourly_berth_check(
+                            _fender_at, point="B"
+                        )
+                        v.status = "WAITING_BERTH_B"
+                        v.next_event_time = _next_chk
+                        self.log_event(
+                            t, v.name, "WAITING_MOTHER_RETURN",
+                            f"{v.assigned_mother} fendering not yet complete; "
+                            f"ready {self.hours_to_dt(_fender_at).strftime('%Y-%m-%d %H:%M')} — "
+                            f"re-checking {self.hours_to_dt(_next_chk).strftime('%Y-%m-%d %H:%M')}",
+                            voyage_num=v.current_voyage, mother=v.assigned_mother)
+                        continue
+                    # Gate: do not proceed while another vessel already occupies this berth
+                    _berth_occupant = self.mother_berth_current_occupant(v.assigned_mother)
+                    if _berth_occupant is not None and _berth_occupant.name != v.name:
+                        _wait_until = max(_berth_occupant.next_event_time, t + 0.5)
+                        _next_chk = self.next_daylight_hourly_berth_check(_wait_until, point="B")
+                        v.status = "WAITING_BERTH_B"
+                        v.next_event_time = _next_chk
+                        self.log_event(t, v.name, "WAITING_BERTH_B",
+                                       f"Berth at {v.assigned_mother} occupied by "
+                                       f"{_berth_occupant.name} ({_berth_occupant.status}); "
+                                       f"waiting until {self.hours_to_dt(_next_chk).strftime('%Y-%m-%d %H:%M')}",
+                                       voyage_num=v.current_voyage, mother=v.assigned_mother)
+                        continue
+                    # Concurrent-occupancy guard: fire just before hose opens.
+                    # If two actors have both reached BERTHING_B at this mother
+                    # simultaneously (race condition), abort the smaller-volume vessel.
+                    if self._concurrent_berth_guard(v.name, v.cargo_bbl,
+                                                    v.assigned_mother, t):
+                        v.status          = "WAITING_BERTH_B"
+                        v.assigned_mother = None
+                        v.next_event_time = self.next_daylight_hourly_berth_check(t, point="B")
+                        continue
                     v.status = "HOSE_CONNECT_B"
-                    v.next_event_time = t + HOSE_CONNECTION_HOURS
+                    _hose_h = self._hose_connect_hours()
+                    v.next_event_time = t + _hose_h
                     selected_mother = v.assigned_mother
                     self.log_event(t, v.name, "HOSE_CONNECTION_START_B",
-                                   f"Hose connection initiated at {selected_mother} (2 hours)",
+                                   f"Hose connection initiated at {selected_mother} ({_hose_h:.1f}h)",
                                    voyage_num=v.current_voyage)
 
                 elif v.status == "HOSE_CONNECT_B":
                     if v.assigned_mother not in MOTHER_NAMES:
-                        self.log_event(t, v.name, "WAITING_MOTHER_CAPACITY",
-                                       "Blocked: no explicit mother assignment at Point B (fallback disabled)",
+                        # No valid mother assignment — reset to WAITING_BERTH_B
+                        # so the candidate-selection logic can assign one.
+                        v.status = "WAITING_BERTH_B"
+                        v.next_event_time = self.next_daylight_hourly_berth_check(t, point="B")
+                        self.log_event(t, v.name, "WAITING_BERTH_B",
+                                       "No mother assignment at HOSE_CONNECT_B — "
+                                       "returning to WAITING_BERTH_B for reassignment",
                                        voyage_num=v.current_voyage)
-                        v.next_event_time = t + 0.5
                         continue
                     selected_mother = v.assigned_mother
                     if not self.mother_is_at_point_b(selected_mother, t):
@@ -4779,51 +6433,185 @@ class Simulation:
                         )
                         continue
                     _mother_cap = self.mother_capacity_bbl(selected_mother)
-                    if self.mother_bbl[selected_mother] + v.cargo_bbl > _mother_cap:
+                    _mother_space = max(0.0, _mother_cap - self.mother_bbl[selected_mother])
+                    _is_mto_vessel = getattr(v, "_is_mto_offload", False)
+
+                    # ── Hard capacity ceiling — all primary mothers ───────────
+                    # A vessel whose full cargo would push the mother above her
+                    # rated capacity must be aborted immediately before the hose
+                    # opens.  The committed-volume check in point_b_candidate_slots
+                    # runs at scheduling time; by the time a vessel arrives and
+                    # reaches HOSE_CONNECT_B the mother's actual stock may have
+                    # changed (e.g. a concurrent discharge completed since the
+                    # slot was booked).  This is the authoritative last-chance
+                    # gate that enforces the physical ceiling at pump time.
+                    #
+                    # Scope: ALL mother vessels.
+                    #
+                    # Action when cargo > headroom:
+                    #   • Abort — cast off and return to WAITING_BERTH_B with
+                    #     assigned_mother cleared so the vessel is immediately
+                    #     eligible for the next available mother with space.
+                    #   • MTO transients are NOT exempt: an MTO vessel that
+                    #     has accumulated more cargo than the mother can accept
+                    #     must wait for the mother to export and return, or seek
+                    #     the other primary mother.
+                    if v.cargo_bbl > _mother_space:
+                        cast_off_t = self.next_cast_off_window(t)
+                        self.mother_berth_free_at[selected_mother] = cast_off_t + CAST_OFF_HOURS
+                        v.status          = "CAST_OFF_B"
+                        v.next_event_time = cast_off_t + CAST_OFF_HOURS
+                        _abort_reason = (
+                            f"{selected_mother} stock {self.mother_bbl[selected_mother]:,.0f} bbl "
+                            f"+ {v.cargo_bbl:,.0f} bbl cargo = "
+                            f"{self.mother_bbl[selected_mother] + v.cargo_bbl:,.0f} bbl — "
+                            f"exceeds capacity {_mother_cap:,.0f} bbl "
+                            f"(headroom {_mother_space:,.0f} bbl); "
+                            f"aborting discharge and reassigning"
+                        )
+                        self.log_event(t, v.name, "MOTHER_CAPACITY_ABORT",
+                                       _abort_reason,
+                                       voyage_num=v.current_voyage,
+                                       mother=selected_mother)
+                        self.log_event(cast_off_t, v.name, "CAST_OFF_START_B",
+                                       f"Cast-off from {selected_mother} "
+                                       f"(capacity abort, {CAST_OFF_HOURS}h)",
+                                       voyage_num=v.current_voyage,
+                                       mother=selected_mother)
+                        # Clear assignment so candidate-selection can find a
+                        # better-fit mother (or WAITING_MOTHER_CAPACITY if none).
+                        v.assigned_mother = None
+                        continue
+
+                    if _mother_space <= 0:
+                        # Mother is completely full — wait and retry
                         self.log_event(t, v.name, "WAITING_MOTHER_CAPACITY",
                                        f"Cannot start discharge - {selected_mother} lacks space",
                                        voyage_num=v.current_voyage)
                         v.next_event_time = t + 6
-                    else:
-                        # Blend vessel cargo API into mother vessel.
-                        # Vessel carries the storage point's API exactly — no blending at load point.
-                        _vessel_api_val = self.vessel_api.get(v.name, 0.0)
-                        self.mother_api[selected_mother] = self.blend_api(
-                            self.mother_bbl[selected_mother], self.mother_api.get(selected_mother, 0.0),
-                            v.cargo_bbl, _vessel_api_val)
-                        self.mother_bbl[selected_mother] += v.cargo_bbl
-                        v.status = "DISCHARGING"
-                        _disch_rate = VESSEL_DISCHARGE_RATE_BPH.get(v.name)
-                        _disch_hrs = (v.cargo_bbl / _disch_rate) if _disch_rate else DISCHARGE_HOURS
-                        self.mother_berth_free_at[selected_mother] = max(
-                            self.mother_berth_free_at[selected_mother], t + _disch_hrs
+                        continue
+
+                    _actual_discharge = v.cargo_bbl   # always discharge full volume
+                    # Blend vessel cargo API into mother vessel.
+                    _vessel_api_val = self.vessel_api.get(v.name, 0.0)
+                    self.mother_api[selected_mother] = self.blend_api(
+                        self.mother_bbl[selected_mother], self.mother_api.get(selected_mother, 0.0),
+                        _actual_discharge, _vessel_api_val)
+                    self.mother_bbl[selected_mother] += _actual_discharge
+                    v.cargo_bbl -= _actual_discharge
+                    if v.cargo_bbl <= 0:
+                        v.cargo_bbl = 0
+                        self.vessel_api[v.name] = 0.0
+                    v.status = "DISCHARGING"
+                    _disch_rate = VESSEL_DISCHARGE_RATE_BPH.get(v.name)
+                    _nominal_disch_hrs = (_actual_discharge / _disch_rate) if _disch_rate else DISCHARGE_HOURS
+                    # Apply variability: discharge rate uncertainty + congestion
+                    _n_waiting_b = sum(
+                        1 for vv in self.vessels
+                        if vv.status in {"WAITING_BERTH_B", "BERTHING_B", "HOSE_CONNECT_B"}
+                        and vv is not v
+                    )
+                    _cong = _congestion_factor(_n_waiting_b)
+                    _disch_hrs = (
+                        _variability_sample(_nominal_disch_hrs, VARIABILITY_CV_DISCHARGE) * _cong
+                    )
+                    if hasattr(self, "_sim_stats"):
+                        self._sim_stats.record("discharge", _nominal_disch_hrs, _disch_hrs)
+                    # Lock the serial-discharge slot for this mother now that cargo
+                    # is physically flowing.  Released at CAST_OFF_COMPLETE_B so
+                    # the next vessel can start a fresh discharge on the same day.
+                    self._point_b_register_mother_start(selected_mother, t)
+                    # Lock berth and displace pre-pump incumbents.
+                    # MTO transients get the exclusive-day rule; normal daughters
+                    # get the physical-only lock (pump + cast-off duration).
+                    _is_mto_discharge = getattr(v, "_is_mto_offload", False)
+                    if _is_mto_discharge:
+                        self._enforce_exclusive_day_at_mother(
+                            selected_mother, t,
+                            physical_end=_berth_free_at(t + _disch_hrs),
                         )
-                        v.next_event_time = t + _disch_hrs
-                        self.log_event(t, v.name, "DISCHARGE_START",
-                                       f"Discharging {v.cargo_bbl:,} bbl @ {_vessel_api_val:.2f}° API | "
-                                       f"{selected_mother}: {self.mother_bbl[selected_mother]:,.0f} bbl "
-                                       f"(blended {self.mother_api[selected_mother]:.2f}° API)",
-                                       voyage_num=v.current_voyage,
-                                       mother=selected_mother)
+                    else:
+                        self.mother_berth_free_at[selected_mother] = max(
+                            self.mother_berth_free_at[selected_mother],
+                            _berth_free_at(t + _disch_hrs),
+                        )
+                    v.next_event_time = t + _disch_hrs
+                    # MTO transient offload: stamp "A" suffix on VoyageCode
+                    # (e.g. AMY-000 → AMY-000A) so JMP can distinguish
+                    # transient offloads from normal cargo deliveries.
+                    _is_mto = getattr(v, "_is_mto_offload", False)
+                    _log_vcode = v.current_voyage
+                    if _is_mto:
+                        _base_vcode = make_voyage_code(v.name, v.current_voyage)
+                        v.voyage_code = _base_vcode + "A"
+                    self.log_event(t, v.name, "DISCHARGE_START",
+                                   f"{'[MTO offload] ' if _is_mto else ''}"
+                                   f"Discharging {_actual_discharge:,} bbl @ {_vessel_api_val:.2f}° API | "
+                                   f"{selected_mother}: {self.mother_bbl[selected_mother]:,.0f} bbl "
+                                   f"(blended {self.mother_api[selected_mother]:.2f}° API)"
+                                   + (f" | {v.cargo_bbl:,.0f} bbl residual remaining on vessel" if v.cargo_bbl > 0 else ""),
+                                   voyage_num=_log_vcode,
+                                   mother=selected_mother)
 
                 elif v.status == "DISCHARGING":
                     if v.assigned_mother not in MOTHER_NAMES:
-                        self.log_event(t, v.name, "WAITING_MOTHER_CAPACITY",
-                                       "Blocked: no explicit mother assignment at Point B (fallback disabled)",
+                        # No valid mother assignment — cast off and return to load
+                        cast_off_t = self.next_cast_off_window(t)
+                        v.status = "CAST_OFF_B"
+                        v.next_event_time = cast_off_t + CAST_OFF_HOURS
+                        self.log_event(t, v.name, "CAST_OFF_START_B",
+                                       "No mother assignment at DISCHARGING — casting off",
                                        voyage_num=v.current_voyage)
-                        v.next_event_time = t + 0.5
                         continue
                     selected_mother = v.assigned_mother
+
+                    # If vessel still has residual cargo after discharge cycle,
+                    # determine correct action based on whether this is MTO.
+                    if v.cargo_bbl > 0:
+                        if getattr(v, "_is_mto_offload", False):
+                            # Residual after MTO offload: unexpected, but clear it so
+                            # the vessel can cast off cleanly and return to loading.
+                            # (HOSE_CONNECT_B now always transfers full cargo so this
+                            # path should not normally be reached.)
+                            self.log_event(
+                                t, v.name, "DISCHARGE_PARTIAL_COMPLETE",
+                                f"[MTO] Residual {v.cargo_bbl:,.0f} bbl after MTO discharge "
+                                f"— clearing and casting off.",
+                                voyage_num=v.current_voyage,
+                            )
+                            v.cargo_bbl = 0
+                            # Fall through to normal cast-off below
+                        if True:   # unified cast-off regardless of MTO/non-MTO
+                            # Non-MTO vessel with residual (edge case): cast off normally.
+                            # This can occur when a mother fills up mid-pump on a
+                            # normal cargo delivery. The vessel returns and the
+                            # residual stays on board for the next BIA trip.
+                            cast_off_t = self.next_cast_off_window(t)
+                            v.status = "CAST_OFF_B"
+                            v.next_event_time = cast_off_t + CAST_OFF_HOURS
+                            self.log_event(
+                                t, v.name, "DISCHARGE_PARTIAL_COMPLETE",
+                                f"Mother filled: {v.cargo_bbl:,.0f} bbl residual retained on board",
+                                voyage_num=v.current_voyage,
+                            )
+                            continue
+
                     v.cargo_bbl = 0
                     self.vessel_api[v.name] = 0.0
-                    # Track how many daughters have fully discharged to SanJulian
-                    # since her last transload cycle — she must receive at least
-                    # two before she may offload (T2/T3/T4).
-                    if selected_mother == MOTHER_QUATERNARY_NAME:
-                        self.sanjulian_daughters_loaded += 1
+                    # Clear MTO offload flag and restore normal voyage code
+                    if getattr(v, "_is_mto_offload", False):
+                        v._is_mto_offload = False
+                        v.voyage_code = make_voyage_code(v.name, v.current_voyage)
                     # Enforce daylight-only cast-off at BIA
                     cast_off_b_t = self.next_cast_off_window(t)
                     wait_co_b = cast_off_b_t - t
+                    # Update berth lock to the EXACT cast-off completion time now that
+                    # we know whether a nighttime wait applies. This supersedes the
+                    # conservative estimate set at HOSE_CONNECT_B / WAITING_BERTH_B.
+                    self.mother_berth_free_at[selected_mother] = max(
+                        self.mother_berth_free_at[selected_mother],
+                        _berth_free_at(t),  # t = pump complete; cast_off_b_t already computed
+                    )
                     v.status = "CAST_OFF_B"
                     v.next_event_time = cast_off_b_t + CAST_OFF_HOURS
                     self.log_event(t, v.name, "DISCHARGE_COMPLETE",
@@ -4840,24 +6628,137 @@ class Simulation:
                                    voyage_num=v.current_voyage)
 
                 elif v.status == "CAST_OFF_B":
+                    # MTO discharger: vessel cast off from anchor after transferring
+                    # its cargo to the transient — it was never physically berthed,
+                    # so assigned_mother may be None. Skip the mother check and go
+                    # straight to WAITING_RETURN_STOCK.
                     if v.assigned_mother not in MOTHER_NAMES:
-                        self.log_event(t, v.name, "WAITING_MOTHER_CAPACITY",
-                                       "Blocked: no explicit mother assignment at Point B (fallback disabled)",
+                        if v.cargo_bbl == 0:
+                            # Casting off from anchor after MTO transfer — no mother
+                            self.log_event(t, v.name, "CAST_OFF_COMPLETE_B",
+                                           "Cast-off complete (MTO discharger — no berth occupied)",
+                                           voyage_num=v.current_voyage)
+                            # Activate deferred dormancy if pending
+                            if getattr(v, "_dormancy_pending", False):
+                                v._dormancy_pending = False
+                                _end_h = getattr(v, "_dormancy_end_hour", None)
+                                if _end_h is not None:
+                                    v.resumption_hour = _end_h
+                                v.resumption_hold_logged = False
+                                v.status = "IDLE_A"
+                                v.assigned_mother = None
+                                v.next_event_time = t
+                                self.log_event(
+                                    t, v.name, "DORMANCY_ACTIVATED",
+                                    f"Deferred dormancy active after MTO transfer — idle until "
+                                    f"{self.hours_to_dt(v.resumption_hour).strftime('%Y-%m-%d %H:%M') if v.resumption_hour else 'indefinite'}",
+                                    voyage_num=v.current_voyage,
+                                )
+                            else:
+                                v.status = "WAITING_RETURN_STOCK"
+                                v.next_event_time = t
+                            continue
+                        # No mother but still has cargo — send to WAITING_BERTH_B for reassignment
+                        v.status = "WAITING_BERTH_B"
+                        v.next_event_time = self.next_daylight_hourly_berth_check(t, point="B")
+                        self.log_event(t, v.name, "WAITING_BERTH_B",
+                                       "No mother assignment at CAST_OFF_B — returning to WAITING_BERTH_B",
                                        voyage_num=v.current_voyage)
-                        v.next_event_time = t + 0.5
                         continue
                     selected_mother = v.assigned_mother
-                    # SanJulian never triggers the export state machine — it
-                    # transloads to primary mothers instead (see _run_sanjulian_transload)
-                    if selected_mother != MOTHER_QUATERNARY_NAME:
+                    if v.cargo_bbl > 0:
+                        # Discharge was aborted (GreenEagle capacity exceeded) — vessel still
+                        # has cargo; clear mother assignment and re-queue for a different mother
+                        v.assigned_mother = None
+                        v.status = "WAITING_BERTH_B"
+                        v.next_event_time = t
+                        self.log_event(t, v.name, "CAST_OFF_COMPLETE_B",
+                                       f"Cast-off from {selected_mother} complete (abort) — "
+                                       f"{v.cargo_bbl:,} bbl still aboard; re-queuing for alternative mother",
+                                       voyage_num=v.current_voyage, mother=selected_mother)
+                        continue
+                    # Only mark export_ready when the mother has reached its
+                    # export trigger.  Setting it unconditionally after every
+                    # cast-off was causing Bryanston to start an export cycle
+                    # after receiving just one daughter cargo (85k), far below
+                    # the 465k trigger.
+                    # Record this cast-off time for the export intake buffer.
+                    # The export DOC cannot fire until EXPORT_INTAKE_BUFFER_HOURS
+                    # after this timestamp regardless of export_ready state.
+                    self.export_intake_last_cast_off[selected_mother] = t
+                    _trigger = self.mother_export_trigger_bbl(selected_mother)
+                    if self.mother_bbl[selected_mother] >= _trigger:
                         if not self.export_ready[selected_mother]:
                             self.export_ready_since[selected_mother] = t
                         self.export_ready[selected_mother] = True
+                    # Release the serial-discharge lock so the next waiting
+                    # vessel can berth this mother on the same calendar day
+                    # — enabling two or more serial discharges per day.
+                    self._point_b_deregister_mother(selected_mother, t)
                     self.log_event(t, v.name, "CAST_OFF_COMPLETE_B",
                                    "Cast-off from mother complete; returning to storage",
                                    voyage_num=v.current_voyage)
+
+                    # MTO transient re-anchor: if this cast-off was triggered by
+                    # an abort (insufficient mother space), the vessel still holds
+                    # its consolidated cargo and must return to WAITING_BERTH_B to
+                    # seek a qualifying mother — not sail back to storage.
+                    #
+                    # The cargo-remaining check is essential: after a SUCCESSFUL MTO
+                    # offload the vessel is empty (cargo_bbl == 0).  _is_mto_offload is
+                    # cleared at DISCHARGE_COMPLETE but _mto_transient_since_day was not,
+                    # so without this guard an emptied transient re-anchors with 0 bbl
+                    # and loops forever — repeatedly berthing a mother, "discharging
+                    # 0 bbl", casting off and re-anchoring (e.g. Watson WTS-003 churning
+                    # at GreenEagle on 24–25 Jun after delivering 116k to Bryanston on
+                    # the 22nd).  An empty transient has finished its MTO role and must
+                    # sail back to storage to reload, so clear the transient flags here.
+                    if (getattr(v, "_mto_transient_since_day", None) is not None
+                            and v.cargo_bbl > 0):
+                        v.status = "WAITING_BERTH_B"
+                        v.next_event_time = self.next_daylight_hourly_berth_check(t, point="B")
+                        self.log_event(
+                            t, v.name, "MTO_REANCHOR",
+                            f"[MTO] Re-anchoring at BIA with {v.cargo_bbl:,.0f} bbl on board — "
+                            f"awaiting a primary mother with sufficient space for full cargo",
+                            voyage_num=v.current_voyage,
+                        )
+                        continue
+                    # MTO offload complete (cargo fully delivered): drop the transient
+                    # flags so the now-empty vessel is treated as a normal returning
+                    # daughter and sails back to storage to reload.
+                    if getattr(v, "_mto_transient_since_day", None) is not None:
+                        v._mto_transient_since_day = None
+                        v._mto_offload_wait_since  = None
+
                     v.status = "WAITING_RETURN_STOCK"
                     v.next_event_time = t
+
+                    # ── Deferred dormancy activation ──────────────────────────
+                    # If dormancy was deferred (vessel had cargo when window opened),
+                    # activate it now — the cargo has been delivered and the vessel
+                    # is empty.  Override the WAITING_RETURN_STOCK state.
+                    if getattr(v, "_dormancy_pending", False):
+                        v._dormancy_pending = False
+                        _end_h = getattr(v, "_dormancy_end_hour", None)
+                        if _end_h is not None:
+                            v.resumption_hour = _end_h
+                        v.resumption_hold_logged = False
+                        v.status           = "IDLE_A"
+                        v.cargo_bbl        = 0
+                        self.vessel_api[v.name] = 0.0
+                        v.assigned_storage = None
+                        v.assigned_load_hours = None
+                        v.assigned_mother  = None
+                        v.target_point     = "A"
+                        v.next_event_time  = t
+                        self.log_event(
+                            t, v.name, "DORMANCY_ACTIVATED",
+                            f"Deferred dormancy now active — cargo discharged, vessel idle until "
+                            f"{self.hours_to_dt(v.resumption_hour).strftime('%Y-%m-%d %H:%M') if v.resumption_hour else 'indefinite'} "
+                            f"| priority storage on resumption: {v.resumption_storage}",
+                            voyage_num=v.current_voyage,
+                        )
 
                 elif v.status == "WAITING_RETURN_STOCK":
                     selected_mother = v.assigned_mother if v.assigned_mother in MOTHER_NAMES else "UNASSIGNED"
@@ -4868,8 +6769,8 @@ class Simulation:
                     # Otherwise, if in SanBarth support mode restrict to Point A.
                     if self.point_f_swap_pending_for == v.name:
                         # Will be intercepted below — just need a dummy allocation
-                        # to satisfy the flow; use Chapel as placeholder.
-                        target_storage    = "Chapel"
+                        # to satisfy the flow; use SanBarth as placeholder.
+                        target_storage    = "SanBarth"
                         required_stock    = 0
                         threshold_by_storage = {}
                     else:
@@ -5010,7 +6911,7 @@ class Simulation:
                         # 4-leg return: BIA → BW (1.5h) → cross BW (0.5h, tidal) →
                         #               CH (1h, tidal) → Point D (3h, tidal)
                         v.status = "SAILING_B_TO_BW_IN"
-                        v.next_event_time = sail_t + SAIL_HOURS_B_TO_BW
+                        v.next_event_time = sail_t + _sail_leg(SAIL_HOURS_B_TO_BW, self)
                     elif v.target_point in ("E", "G"):
                         # Starturn (E) / PGM (G) — short direct return 3h, no breakwater
                         v.status = "SAILING_BA"
@@ -5018,7 +6919,7 @@ class Simulation:
                     else:
                         # A/C return: BIA → FWY (2h) → BW (2h) → cross BW (0.5h, tidal) → A/C (1.5h)
                         v.status = "SAILING_B_TO_FWY"
-                        v.next_event_time = sail_t + SAIL_HOURS_B_TO_FWY
+                        v.next_event_time = sail_t + _sail_leg(SAIL_HOURS_B_TO_FWY, self)
 
                 elif v.status == "SAILING_B_TO_FWY":
                     # BIA → Fairway Buoy (2h, A/C return leg 1)
@@ -5035,7 +6936,7 @@ class Simulation:
                                        f"{self.hours_to_dt(depart_fwy).strftime('%Y-%m-%d %H:%M')}",
                                        voyage_num=v.current_voyage)
                     v.status = "SAILING_FWY_TO_BW"
-                    v.next_event_time = depart_fwy + SAIL_HOURS_FWY_TO_BW
+                    v.next_event_time = depart_fwy + _sail_leg(SAIL_HOURS_FWY_TO_BW, self)
 
                 elif v.status == "SAILING_FWY_TO_BW":
                     # Arrived at Breakwater inbound (A/C return leg 2) — tidal gate to cross
@@ -5063,7 +6964,7 @@ class Simulation:
                     self.assign_ac_point_post_breakwater(v, arrival)
                     self.trigger_ac_post_breakwater_reassessment(arrival, trigger_vessel=v.name)
                     v.status = "SAILING_BA"
-                    v.next_event_time = arrival + SAIL_HOURS_BW_TO_A
+                    v.next_event_time = arrival + _sail_leg(SAIL_HOURS_BW_TO_A, self)
 
                 elif v.status == "SAILING_B_TO_BW_IN":
                     # Arrived at clear breakwater (inbound from BIA, 1.5h)
@@ -5080,7 +6981,7 @@ class Simulation:
                                        f"({self.tidal_period_label(depart_bw)})",
                                        voyage_num=v.current_voyage)
                     v.status = "SAILING_CROSS_BW_IN"
-                    v.next_event_time = depart_bw + SAIL_HOURS_CROSS_BW
+                    v.next_event_time = depart_bw + _sail_leg(SAIL_HOURS_CROSS_BW, self)
 
                 elif v.status == "SAILING_CROSS_BW_IN":
                     # Crossed breakwater inbound — next leg to Cawthorne Channel (tidal)
@@ -5097,7 +6998,7 @@ class Simulation:
                                        f"({self.tidal_period_label(depart_bw_ch)})",
                                        voyage_num=v.current_voyage)
                     v.status = "SAILING_BW_TO_CH_IN"
-                    v.next_event_time = depart_bw_ch + SAIL_HOURS_BW_TO_CH_IN
+                    v.next_event_time = depart_bw_ch + _sail_leg(SAIL_HOURS_BW_TO_CH_IN, self)
 
                 elif v.status == "SAILING_BW_TO_CH_IN":
                     # Arrived Cawthorne Channel inbound — final leg to Point D (tidal)
@@ -5114,7 +7015,7 @@ class Simulation:
                                        f"({self.tidal_period_label(depart_ch_d)})",
                                        voyage_num=v.current_voyage)
                     v.status = "SAILING_CH_TO_D"
-                    v.next_event_time = depart_ch_d + SAIL_HOURS_CH_TO_D
+                    v.next_event_time = depart_ch_d + _sail_leg(SAIL_HOURS_CH_TO_D, self)
 
                 elif v.status == "SAILING_CH_TO_D":
                     # Arrived Point D — reset for next loading cycle
@@ -5146,7 +7047,7 @@ class Simulation:
                     v._voyage_assigned = False  # allow next cycle to get a new voyage number
                     # Point F vessels that are not the active Ibom loader must be
                     # directed to SanBarth (Point A) — reset target_point here so
-                    # IDLE_A dispatch immediately sees Chapel/JasmineS as eligible.
+                    # IDLE_A dispatch immediately sees SanBarth/JasmineS as eligible.
                     # Also redirect if this vessel IS the active Ibom loader but has
                     # just returned from delivering a partial Ibom cargo (target_point
                     # was set to "B" when casting off from Point F — it is no longer
@@ -5201,8 +7102,6 @@ class Simulation:
             # no other export already active (one export at a time).
             if active_export_mother is None:
                 for _fm, _fhours in EXPORT_FORCE_SCHEDULE.items():
-                    if _fm == MOTHER_QUATERNARY_NAME:
-                        continue   # SanJulian never exports
                     if self.export_state[_fm] is not None:
                         continue   # already in an export cycle
                     if not self.mother_is_at_point_b(_fm, t):
@@ -5223,6 +7122,19 @@ class Simulation:
                                 # Reschedule by one timestep so the loop retries
                                 EXPORT_FORCE_SCHEDULE[_fm] = [
                                     h if h != _fh else t + TIME_STEP_HOURS
+                                    for h in _fhours
+                                ]
+                                break
+                            # ── Intake buffer check (forced path) ────────────────
+                            _forced_last_co = self.export_intake_last_cast_off.get(_fm, 0.0)
+                            _forced_clear_at = _forced_last_co + EXPORT_INTAKE_BUFFER_HOURS
+                            if t < _forced_clear_at:
+                                self.log_event(t, _fm, "EXPORT_INTAKE_BUFFER",
+                                               f"Forced export: waiting for {EXPORT_INTAKE_BUFFER_HOURS}h "
+                                               f"intake buffer after last cast-off "
+                                               f"(clear at {self.hours_to_dt(_forced_clear_at).strftime('%H:%M')})")
+                                EXPORT_FORCE_SCHEDULE[_fm] = [
+                                    h if h != _fh else _forced_clear_at
                                     for h in _fhours
                                 ]
                                 break
@@ -5251,11 +7163,14 @@ class Simulation:
                             # normally (they hold their own next_event_time).
                             # The berth is released when the mother returns
                             # (mother_available_at is set by the return logic).
+                            _forced_vol = min(
+                                self.mother_bbl[_fm],
+                                self.mother_capacity_bbl(_fm),
+                            )
                             _lock_until = t + (EXPORT_DOC_HOURS
                                                + EXPORT_SAIL_HOURS
                                                + EXPORT_HOSE_HOURS
-                                               + (self.mother_bbl[_fm]
-                                                  / max(1, EXPORT_RATE_BPH))
+                                               + (_forced_vol / max(1, EXPORT_RATE_BPH))
                                                + EXPORT_SAIL_HOURS + 2.0)
                             self.mother_berth_free_at[_fm] = max(
                                 self.mother_berth_free_at.get(_fm, 0.0),
@@ -5271,25 +7186,67 @@ class Simulation:
                     if active_export_mother is not None:
                         break
             if active_export_mother is None and t >= self.next_export_allowed_at:
+                # ── Proactive trigger check ───────────────────────────────────
+                # In case a mother reached her export trigger via a partial
+                # discharge without going through CAST_OFF_B (the normal path),
+                # ensure export_ready is set here.
+                for _mn in MOTHER_NAMES:
+                    if (self.export_state[_mn] is None
+                            and not self.export_ready[_mn]
+                            and self.mother_bbl[_mn] >= self.mother_export_trigger_bbl(_mn)):
+                        self.export_ready[_mn] = True
+                        if not self.export_ready_since[_mn]:
+                            self.export_ready_since[_mn] = t
+
+                # ── Export unavailability block ───────────────────────────────
+                # If the current sim hour falls within any export unavailability
+                # window, suppress new export departures entirely.  Mothers that
+                # are already mid-export cycle (DOC/SAILING/HOSE/IN_PORT) are
+                # NOT interrupted — they complete normally.  We just skip the
+                # ready_candidates selection so no NEW exports start.
+                _eu_windows = getattr(self, 'export_unavailability_windows', [])
+                _export_blocked = any(
+                    _eu_s <= t < _eu_e for (_eu_s, _eu_e) in _eu_windows
+                )
+                if _export_blocked:
+                    # Log once per timestep entry into the window
+                    for (_eu_s, _eu_e) in _eu_windows:
+                        if abs(t - _eu_s) < TIME_STEP_HOURS * 0.5:
+                            self.log_event(
+                                t, "SYSTEM", "EXPORT_UNAVAILABLE_START",
+                                f"Export unavailability window active until "
+                                f"{self.hours_to_dt(_eu_e).strftime('%Y-%m-%d %H:%M')} — "
+                                f"mother vessels held at BIA"
+                            )
+                    # Log exit from window once
+                    for (_eu_s, _eu_e) in _eu_windows:
+                        if abs(t - _eu_e) < TIME_STEP_HOURS * 0.5:
+                            self.log_event(
+                                t, "SYSTEM", "EXPORT_UNAVAILABLE_END",
+                                "Export unavailability window ended — normal export operations resume"
+                            )
+
                 ready_candidates = []
                 for mother_name in MOTHER_NAMES:
-                    # SanJulian never exports — it transloads to primary mothers instead
-                    if mother_name == MOTHER_QUATERNARY_NAME:
-                        continue
                     if (
                         self.export_state[mother_name] is None
                         and self.export_ready[mother_name]
                         and self.mother_export_departure_eligible(mother_name)
                         and t >= self.mother_available_at[mother_name]
+                        and not _export_blocked
                     ):
+                        # Block export DOC if any daughter is actively berthed here.
                         daughter_active_here = any(
                             vv.assigned_mother == mother_name
                             and vv.status in {"BERTHING_B", "HOSE_CONNECT_B", "DISCHARGING"}
                             for vv in self.vessels
                         )
                         if daughter_active_here:
-                            self.log_event(t, mother_name, "EXPORT_WAIT_DISCHARGE",
-                                           "Export ready but waiting for active daughter berthing/discharge operations")
+                            self.log_event(
+                                t, mother_name, "EXPORT_WAIT_DISCHARGE",
+                                "Export ready but waiting for active "
+                                "daughter berthing/discharge operations to complete"
+                            )
                             continue
                         ready_since = self.export_ready_since[mother_name]
                         if ready_since is None:
@@ -5301,26 +7258,44 @@ class Simulation:
                     selected_export_mother = ready_candidates[0][1]
                     wall_h = (t + SIM_HOUR_OFFSET) % 24
                     if DAYLIGHT_START <= wall_h < DAYLIGHT_END:
-                        self.export_state[selected_export_mother] = "DOC"
-                        self.export_ready[selected_export_mother] = False
-                        self.export_ready_since[selected_export_mother] = None
-                        self.export_end_time[selected_export_mother] = t + EXPORT_DOC_HOURS
-                        # Lock the berth for the full export round-trip so that
-                        # no new daughter can berth while she is away.  Daughters
-                        # already mid-discharge finish normally; no new ones start.
-                        _nat_lock = t + (EXPORT_DOC_HOURS
-                                         + EXPORT_SAIL_HOURS
-                                         + EXPORT_HOSE_HOURS
-                                         + (self.mother_bbl[selected_export_mother]
-                                            / max(1, EXPORT_RATE_BPH))
-                                         + EXPORT_SAIL_HOURS + 2.0)
-                        self.mother_berth_free_at[selected_export_mother] = max(
-                            self.mother_berth_free_at.get(selected_export_mother, 0.0),
-                            _nat_lock,
-                        )
-                        self.log_event(t, selected_export_mother, "EXPORT_DOC_START",
-                                       f"Export documentation ({EXPORT_DOC_HOURS}h) | "
-                                       f"Berth locked until return")
+                        # ── Intake buffer check ───────────────────────────────
+                        # Do not fire DOC until EXPORT_INTAKE_BUFFER_HOURS after
+                        # the last daughter cast-off, so the
+                        # final intake volume has settled before documentation.
+                        _last_co = self.export_intake_last_cast_off.get(
+                            selected_export_mother, 0.0)
+                        _intake_clear_at = _last_co + EXPORT_INTAKE_BUFFER_HOURS
+                        if t < _intake_clear_at:
+                            self.log_event(
+                                t, selected_export_mother, "EXPORT_INTAKE_BUFFER",
+                                f"Export ready but waiting for {EXPORT_INTAKE_BUFFER_HOURS}h "
+                                f"intake buffer after last cast-off "
+                                f"(clear at {self.hours_to_dt(_intake_clear_at).strftime('%H:%M')})"
+                            )
+                        else:
+                            self.export_state[selected_export_mother] = "DOC"
+                            self.export_ready[selected_export_mother] = False
+                            self.export_ready_since[selected_export_mother] = None
+                            self.export_end_time[selected_export_mother] = t + EXPORT_DOC_HOURS
+                            # Lock the berth for the full export round-trip so that
+                            # no new daughter can berth while she is away.  Daughters
+                            # already mid-discharge finish normally; no new ones start.
+                            _export_vol_capped = min(
+                                self.mother_bbl[selected_export_mother],
+                                self.mother_capacity_bbl(selected_export_mother),
+                            )
+                            _nat_lock = t + (EXPORT_DOC_HOURS
+                                             + EXPORT_SAIL_HOURS
+                                             + EXPORT_HOSE_HOURS
+                                             + (_export_vol_capped / max(1, EXPORT_RATE_BPH))
+                                             + EXPORT_SAIL_HOURS + 2.0)
+                            self.mother_berth_free_at[selected_export_mother] = max(
+                                self.mother_berth_free_at.get(selected_export_mother, 0.0),
+                                _nat_lock,
+                            )
+                            self.log_event(t, selected_export_mother, "EXPORT_DOC_START",
+                                           f"Export documentation ({EXPORT_DOC_HOURS}h) | "
+                                           f"Berth locked until return")
                     else:
                         next_light = self.next_daylight_sail(t)
                         if next_light > t:
@@ -5329,10 +7304,6 @@ class Simulation:
                                            f"{self.hours_to_dt(next_light).strftime('%Y-%m-%d %H:%M')}")
 
             for mother_name in MOTHER_NAMES:
-                # SanJulian has no export state — handled by transload machinery
-                if mother_name == MOTHER_QUATERNARY_NAME:
-                    continue
-
                 state = self.export_state[mother_name]
                 if state == "DOC":
                     if t >= self.export_end_time[mother_name]:
@@ -5341,15 +7312,18 @@ class Simulation:
                             and vv.status in {"BERTHING_B", "HOSE_CONNECT_B", "DISCHARGING"}
                             for vv in self.vessels
                         )
-                        if daughter_active_here:
-                            # Hold export departure while daughter berth/discharge
-                            # operations are active on this mother at Point B.
+                        _any_active = daughter_active_here
+                        # Hard timeout: never wait more than 24h after DOC completes.
+                        # Without this, a continuous stream of daughters keeps the
+                        # mother in DOC forever and the export never sails.
+                        _doc_complete_t = self.export_start_time.get(mother_name) or t
+                        _waited = t - (_doc_complete_t + EXPORT_DOC_HOURS)
+                        if _any_active and _waited < 24.0:
                             self.export_end_time[mother_name] = t + TIME_STEP_HOURS
                             self.log_event(
-                                t,
-                                mother_name,
-                                "EXPORT_WAIT_DISCHARGE",
-                                "Export docs complete but waiting for active daughter berthing/discharge operations",
+                                t, mother_name, "EXPORT_WAIT_DISCHARGE",
+                                "Export docs complete but waiting for active "
+                                "daughter discharge operations",
                             )
                             continue
                         sail_start = self.next_export_sail_start(t)
@@ -5390,7 +7364,19 @@ class Simulation:
                                        f"Exported {amount:,} bbl in port; Remaining: {self.mother_bbl[mother_name]:,.0f} bbl")
                     if self.mother_bbl[mother_name] <= 0:
                         export_complete_t = t
-                        self.export_state[mother_name] = None
+                        # Mother is now empty but still PHYSICALLY at the export
+                        # terminal — she must sail ~6h back to BIA and complete
+                        # fendering before she can receive any cargo again.  Use a
+                        # dedicated RETURNING state (not None) for this window so
+                        # every loading guard (daughter discharge, MTO offload,
+                        # full-fit routing) treats her as
+                        # unavailable.  Previously the state went straight to None
+                        # at export-complete, which briefly made her look available
+                        # while she was still hours away at the terminal — that let
+                        # daughters "load" a mother that was still at
+                        # export (the 4-Jun/5-Jun GreenEagle violations).  The state
+                        # is cleared to None only at EXPORT_FENDERING_COMPLETE below.
+                        self.export_state[mother_name] = "RETURNING"
                         self.export_start_time[mother_name] = None
                         self.export_end_time[mother_name] = None
                         self.log_event(t, mother_name, "EXPORT_COMPLETE",
@@ -5402,15 +7388,12 @@ class Simulation:
                                            f"{self.hours_to_dt(return_depart).strftime('%Y-%m-%d %H:%M')}")
                         return_arrival = return_depart + EXPORT_SAIL_HOURS
                         self.mother_available_at[mother_name] = return_arrival + 2
-                        # Release the berth lock so daughters can berth again
-                        # once fendering is complete. mother_berth_free_at is
-                        # reset to the fendering-complete time, matching
-                        # mother_available_at exactly.
                         _fender_done = return_arrival + 2
-                        self.mother_berth_free_at[mother_name] = min(
-                            self.mother_berth_free_at.get(mother_name, _fender_done),
-                            _fender_done,
-                        )
+                        # Release the berth lock so daughters can berth again
+                        # once fendering is complete.  Use direct assignment —
+                        # the old min() kept the far-future DOC-phase lock value,
+                        # which prevented any new daughters from ever berthing.
+                        self.mother_berth_free_at[mother_name] = _fender_done
                         self.log_event(return_depart, mother_name, "EXPORT_RETURN_START",
                                        f"Departing export terminal ({EXPORT_SAIL_HOURS}h transit)")
                         self.log_event(return_arrival, mother_name, "EXPORT_RETURN_ARRIVE",
@@ -5429,14 +7412,17 @@ class Simulation:
                             f"Mandatory post-export buffer complete ({EXPORT_SERIES_BUFFER_HOURS}h from export discharge completion) — next export sailing may begin",
                         )
 
-            # 3b. Advance SanJulian transload state machine
-            # SanJulian never exports — instead it pumps inventory to primary
-            # mothers whenever one of the four trigger conditions is satisfied.
-            self._run_sanjulian_transload(t)
+                elif state == "RETURNING":
+                    # Empty mother sailing back from the export terminal and
+                    # fendering at BIA.  She remains unavailable for loading for
+                    # this entire window; only when fendering is complete
+                    # (mother_available_at) does she become a valid berth
+                    # target again.  Clearing the state here — rather than at
+                    # export-complete — is what blocks all loads during the return.
+                    if t >= self.mother_available_at.get(mother_name, 0.0):
+                        self.export_state[mother_name] = None
 
-            # 3c. Advance ZeeZee third-party discharge state machine
-            # Runs after SanJulian so both compete for the same berth slots
-            # with ZeeZee given deadline-enforced priority.
+            # 3b. Advance ZeeZee third-party discharge state machine
             self._run_zeezee(t)
 
             # 4. Debit overflow accumulation and credit stock when space is available
@@ -5497,14 +7483,14 @@ class Simulation:
                 "Time"       : _t_dt,
                 "Day"        : _t_day,
                 "Storage_bbl": round(sum(self.storage_bbl.values())),
-                "Chapel_bbl": round(_s_bbl[STORAGE_PRIMARY_NAME]),
+                "SanBarth_bbl": round(_s_bbl[STORAGE_PRIMARY_NAME]),
                 "JasmineS_bbl": round(_s_bbl[STORAGE_SECONDARY_NAME]),
                 "Westmore_bbl": round(_s_bbl[STORAGE_TERTIARY_NAME]),
                 "Duke_bbl": round(_s_bbl[STORAGE_QUATERNARY_NAME]),
                 "Starturn_bbl": round(_s_bbl[STORAGE_QUINARY_NAME]),
                 "PGM_bbl": round(_s_bbl[STORAGE_SENARY_NAME]),
                 "Storage_Overflow_Accum_bbl": _ovf_total,
-                "Chapel_Overflow_Accum_bbl": round(_s_ovf[STORAGE_PRIMARY_NAME]),
+                "SanBarth_Overflow_Accum_bbl": round(_s_ovf[STORAGE_PRIMARY_NAME]),
                 "JasmineS_Overflow_Accum_bbl": round(_s_ovf[STORAGE_SECONDARY_NAME]),
                 "Westmore_Overflow_Accum_bbl": round(_s_ovf[STORAGE_TERTIARY_NAME]),
                 "Duke_Overflow_Accum_bbl": round(_s_ovf[STORAGE_QUATERNARY_NAME]),
@@ -5513,22 +7499,19 @@ class Simulation:
                 "PointF_Overflow_Accum_bbl": round(self.point_f_overflow_accum_bbl),
                 "PointF_Active_Loading_bbl": round(self.point_f_active_loading_bbl()),
                 "Mother_bbl" : round(sum(self.mother_bbl.values())),
-                "Bryanston_bbl": round(_m_bbl[MOTHER_PRIMARY_NAME]),
-                "Alkebulan_bbl": round(_m_bbl[MOTHER_SECONDARY_NAME]),
-                "GreenEagle_bbl": round(_m_bbl[MOTHER_TERTIARY_NAME]),
-                "SanJulian_bbl": round(_m_bbl[MOTHER_QUATERNARY_NAME]),
-                "SanJulian": self.sanjulian_status or "IDLE_B",
+                "Bryanston_bbl":  round(_m_bbl[MOTHER_PRIMARY_NAME]),
+                "GreenEagle_bbl": round(_m_bbl[MOTHER_SECONDARY_NAME]),
+                "Alkebulan_bbl":  round(_m_bbl[MOTHER_QUINARY_NAME]),
                 "Total_Exported": self.total_exported,
-                "Chapel_api"   : round(_s_api.get(STORAGE_PRIMARY_NAME,   0.0), 2),
+                "SanBarth_api"   : round(_s_api.get(STORAGE_PRIMARY_NAME,   0.0), 2),
                 "JasmineS_api" : round(_s_api.get(STORAGE_SECONDARY_NAME, 0.0), 2),
                 "Westmore_api" : round(_s_api.get(STORAGE_TERTIARY_NAME,  0.0), 2),
                 "Duke_api"     : round(_s_api.get(STORAGE_QUATERNARY_NAME,0.0), 2),
                 "Starturn_api" : round(_s_api.get(STORAGE_QUINARY_NAME,   0.0), 2),
                 "PGM_api"      : round(_s_api.get(STORAGE_SENARY_NAME,    0.0), 2),
-                "Bryanston_api": round(_m_api.get(MOTHER_PRIMARY_NAME,   0.0), 2),
-                "Alkebulan_api": round(_m_api.get(MOTHER_SECONDARY_NAME, 0.0), 2),
-                "GreenEagle_api": round(_m_api.get(MOTHER_TERTIARY_NAME, 0.0), 2),
-                "SanJulian_api": round(_m_api.get(MOTHER_QUATERNARY_NAME, 0.0), 2),
+                "Bryanston_api":  round(_m_api.get(MOTHER_PRIMARY_NAME,    0.0), 2),
+                "GreenEagle_api": round(_m_api.get(MOTHER_SECONDARY_NAME,  0.0), 2),
+                "Alkebulan_api":  round(_m_api.get(MOTHER_QUINARY_NAME,    0.0), 2),
                 **vessel_statuses,
                 # ZeeZee snapshot — only present when she is visiting
                 **({  "ZeeZee": self.zeezee.status,
@@ -5536,6 +7519,8 @@ class Simulation:
                       "ZeeZee_api": round(self.zeezee.api, 2)}
                    if self.zeezee is not None else {}),
             })
+
+            self._bryanston_call_waiting_vessel_serially(t, reason="post-state-scan")
 
             t = round(t + TIME_STEP_HOURS, 2)
 
@@ -5546,11 +7531,178 @@ class Simulation:
             self.total_exported_api_bbl / self.total_exported
             if self.total_exported > 0 else 0.0
         )
-        # SanJulian final state — exposed so the app can surface them in KPIs
-        self.final_sanjulian_bbl        = self.mother_bbl[MOTHER_QUATERNARY_NAME]
-        self.final_sanjulian_api        = self.mother_api.get(MOTHER_QUATERNARY_NAME, 0.0)
-        # sanjulian_total_transloaded already accumulated during the run
+        # ── Stochastic summary ────────────────────────────────────────────────
+        # calibration_report() is always available (returns {} in deterministic
+        # mode).  The app reads self._variability_summary after run() returns.
+        self._variability_summary = {
+            "enabled":              ENABLE_VARIABILITY,
+            "weather_hold_h_total": round(getattr(self, "_weather_hold_hours_total", 0.0), 2),
+            "calibration":          self.calibration_report(),
+        }
+
         return pd.DataFrame(self.log), pd.DataFrame(self.timeline)
+
+
+# =============================================================================
+# ── WORLD-CLASS LAYER: MONTE CARLO RISK ENVELOPE & VALIDATION HARNESS ─────────
+#
+# Design philosophy (why this is a separate layer, not a rewrite):
+#
+#   The deterministic engine above IS the executable plan — it already enforces
+#   every hard operational constraint (berth occupancy, daylight berthing/cast-off
+#   windows, per-vessel load/discharge rates, hose/fender/documentation durations,
+#   concurrent-berth exclusion, MTO sequencing) and is reproducible.  Real marine
+#   planning desks publish exactly such a single best-estimate plan.
+#
+#   What a deterministic plan cannot show is the RISK around it — how late a
+#   vessel might actually offload once weather, equipment, congestion and human
+#   lag are layered on.  The engine already contains a fully-wired stochastic
+#   layer (triangular per-operation variability, exponential weather holds,
+#   equipment delays, human-decision lag, congestion multipliers, production
+#   fluctuation) gated behind ENABLE_VARIABILITY.  The missing piece — the genuine
+#   gap — is a Monte Carlo driver that runs many independent stochastic
+#   replications and reduces them to a P50/P90 risk envelope, plus a validation
+#   harness that scores the deterministic plan against that envelope.
+#
+#   This gives the two artefacts a real operations system needs side by side:
+#     • the executable PLAN (deterministic), and
+#     • the CONFIDENCE BAND around it (stochastic Monte Carlo).
+# =============================================================================
+
+def _run_single_replication(seed, days=None):
+    """Run one independent simulation replication and return (log_df, timeline_df).
+
+    Honours the module-level ENABLE_VARIABILITY switch.  When variability is on,
+    the supplied seed makes each replication independently reproducible; when it
+    is off, every replication is identical to the deterministic plan (so a Monte
+    Carlo run with variability disabled degenerates, correctly, to the plan).
+    """
+    if seed is not None:
+        random.seed(seed)
+    sim = Simulation()
+    return sim.run()
+
+
+def _replication_metrics(log_df):
+    """Reduce one replication's event log to the operational KPIs that matter.
+
+    Returns a dict of scalar metrics.  Kept deliberately small and robust so the
+    Monte Carlo aggregator can build distributions over each KPI.
+    """
+    import re as _re
+    ev = log_df["Event"].astype(str)
+    detail = log_df["Detail"].astype(str)
+
+    # Real (non-zero) discharges to mothers.
+    _disch_mask = ev.eq("DISCHARGE_START")
+    real_disch = int(sum(1 for d in detail[_disch_mask]
+                         if not _re.search(r"Discharging 0 bbl", d)))
+
+    # Cargo delivered directly to mother vessels.
+    direct = 0
+    for d, m in zip(detail[_disch_mask], log_df["Mother"][_disch_mask].astype(str)):
+        g = _re.search(r"Discharging ([\d,]+)", d)
+        if g and m in ("Bryanston", "GreenEagle"):
+            direct += int(g.group(1).replace(",", ""))
+    to_primary = direct
+
+    # Total cargo loaded (throughput into the daughter fleet).
+    loaded = 0
+    for d in detail[ev.eq("LOADING_COMPLETE")]:
+        g = _re.search(r"Cargo: ([\d,]+)", d)
+        if g:
+            loaded += int(g.group(1).replace(",", ""))
+
+    # Operational stress signals.
+    cap_aborts   = int(ev.eq("MOTHER_CAPACITY_ABORT").sum())
+    berth_aborts = int(ev.eq("CONCURRENT_BERTH_ABORT").sum())
+    weather_holds = int(ev.astype(str).str.contains("WEATHER", case=False, na=False).sum())
+    errors = int(ev.str.contains("ERROR|EXCEPTION", case=False, na=False).sum())
+
+    return {
+        "real_discharges":   real_disch,
+        "cargo_to_primary":  to_primary,
+        "cargo_loaded":      loaded,
+        "capacity_aborts":   cap_aborts,
+        "berth_aborts":      berth_aborts,
+        "weather_holds":     weather_holds,
+        "errors":            errors,
+    }
+
+
+def run_monte_carlo(n_replications=50, base_seed=12345, days=None, progress=False):
+    """Run a Monte Carlo ensemble and return a per-KPI risk envelope.
+
+    Each replication is an independent stochastic realisation of the SAME plan
+    (requires ENABLE_VARIABILITY=True to vary; otherwise all replications are
+    identical to the deterministic plan).  Results are reduced to percentiles —
+    the operational risk band a planner actually needs:
+
+        P10  – optimistic   (only 10% of outcomes are better)
+        P50  – median       (the expected real-world outcome)
+        P90  – conservative (90% of outcomes are at least this good / this few)
+
+    Returns a dict: { kpi_name: {mean, std, p10, p50, p90, min, max}, ... }
+    plus a 'replications' count and the raw per-rep frame under '_raw'.
+    """
+    import numpy as _np
+    rows = []
+    for i in range(n_replications):
+        seed = (base_seed + i) if base_seed is not None else None
+        log_df, _ = _run_single_replication(seed, days=days)
+        rows.append(_replication_metrics(log_df))
+        if progress:
+            print(f"  MC replication {i+1}/{n_replications} done")
+    raw = pd.DataFrame(rows)
+    envelope = {"replications": n_replications, "_raw": raw}
+    for col in raw.columns:
+        vals = raw[col].to_numpy(dtype=float)
+        envelope[col] = {
+            "mean": float(_np.mean(vals)),
+            "std":  float(_np.std(vals, ddof=1)) if len(vals) > 1 else 0.0,
+            "p10":  float(_np.percentile(vals, 10)),
+            "p50":  float(_np.percentile(vals, 50)),
+            "p90":  float(_np.percentile(vals, 90)),
+            "min":  float(_np.min(vals)),
+            "max":  float(_np.max(vals)),
+        }
+    return envelope
+
+
+def validate_plan_against_envelope(plan_metrics, envelope):
+    """Score the deterministic plan against the Monte Carlo risk envelope.
+
+    This is the validation methodology a real operations desk uses: it asks,
+    for each KPI, where the deterministic plan sits within the distribution of
+    achievable real-world outcomes.  A plan that sits far on the optimistic tail
+    (e.g. above P90 for throughput, below P10 for delays) is flagging an
+    over-optimistic assumption — the classic 'mathematically optimal but not
+    operationally achievable' failure the planner must see.
+
+    Returns a per-KPI dict: {plan, p50, p90, plan_vs_p50_pct, realism_flag}.
+    """
+    out = {}
+    for kpi, plan_val in plan_metrics.items():
+        if kpi not in envelope or kpi in ("replications", "_raw"):
+            continue
+        band = envelope[kpi]
+        p50 = band["p50"]
+        gap_pct = (100.0 * (plan_val - p50) / p50) if p50 else 0.0
+        # Throughput KPIs: plan above the optimistic tail is over-optimistic.
+        # Stress KPIs (aborts/errors): plan below the band understates risk.
+        if kpi in ("real_discharges", "cargo_to_primary", "cargo_loaded"):
+            flag = "OPTIMISTIC" if plan_val > band["p90"] + 1e-9 else (
+                   "CONSERVATIVE" if plan_val < band["p10"] - 1e-9 else "REALISTIC")
+        else:
+            flag = "UNDERSTATES_RISK" if plan_val < band["p10"] - 1e-9 else "REALISTIC"
+        out[kpi] = {
+            "plan":            round(plan_val, 1),
+            "p50":             round(p50, 1),
+            "p90":             round(band["p90"], 1),
+            "plan_vs_p50_pct": round(gap_pct, 1),
+            "realism_flag":    flag,
+        }
+    return out
 
 
 # -----------------------------------------------------------------
@@ -5598,8 +7750,7 @@ print(f"    - {STORAGE_QUINARY_NAME:<8}: {sim.storage_bbl[STORAGE_QUINARY_NAME]:
 print(f"  Final Mother Level (Total Point B): {sim.total_mother_bbl():,.0f} bbl")
 print(f"    - {MOTHER_PRIMARY_NAME:<9}: {sim.mother_bbl[MOTHER_PRIMARY_NAME]:,.0f} bbl")
 print(f"    - {MOTHER_SECONDARY_NAME:<9}: {sim.mother_bbl[MOTHER_SECONDARY_NAME]:,.0f} bbl")
-print(f"    - {MOTHER_TERTIARY_NAME:<9}: {sim.mother_bbl[MOTHER_TERTIARY_NAME]:,.0f} bbl")
-print(f"    - {MOTHER_QUATERNARY_NAME:<9}: {sim.mother_bbl[MOTHER_QUATERNARY_NAME]:,.0f} bbl")
+print(f"    - {MOTHER_QUINARY_NAME:<9}: {sim.mother_bbl[MOTHER_QUINARY_NAME]:,.0f} bbl")
 print(f"  Storage Overflow     : {sim.storage_overflow_events} events")
 
 print(f"\n{'-'*65}")
@@ -5623,7 +7774,8 @@ VESSEL_COLORS = {
     "Woodstock" : "#e91e63",   # pink family
     "Bagshot"   : "#00bcd4",   # cyan family
     "Watson"    : "#95a5a6",   # slate/gray family
-    "Berners"   : "#7f8c8d",   # steel gray family
+    "Amyla"   : "#7f8c8d",   # steel gray family
+    "FatimaZarah": "#84cc16",   # lime family
 }
 
 # Each vessel gets a palette of shades derived from its base colour.
@@ -5694,7 +7846,7 @@ ax1.fill_between(timeline_df["Time"], timeline_df["Storage_bbl"],
                  alpha=0.25, color="#e67e22")
 ax1.plot(timeline_df["Time"], timeline_df["Storage_bbl"],
             color="#e67e22", linewidth=2, label="Point A/C/D/E Total Storage Volume")
-ax1.plot(timeline_df["Time"], timeline_df["Chapel_bbl"],
+ax1.plot(timeline_df["Time"], timeline_df["SanBarth_bbl"],
             color="#f1c40f", linewidth=1.4, alpha=0.9, label=f"{STORAGE_PRIMARY_NAME} Volume")
 ax1.plot(timeline_df["Time"], timeline_df["JasmineS_bbl"],
             color="#8e44ad", linewidth=1.4, alpha=0.9, label=f"{STORAGE_SECONDARY_NAME} Volume")
@@ -5704,8 +7856,8 @@ ax1.plot(timeline_df["Time"], timeline_df["Duke_bbl"],
             color="#3498db", linewidth=1.4, alpha=0.9, label=f"{STORAGE_QUATERNARY_NAME} Volume")
 ax1.plot(timeline_df["Time"], timeline_df["Starturn_bbl"],
             color="#d35400", linewidth=1.4, alpha=0.9, label=f"{STORAGE_QUINARY_NAME} Volume")
-ax1.axhline(STORAGE_CAPACITY_BBL, color="#e74c3c", linestyle="--", alpha=0.7,
-                label=f"Std Storage Capacity ({STORAGE_CAPACITY_BBL:,} bbl)")
+ax1.axhline(SANBARTH_STORAGE_CAPACITY_BBL, color="#e74c3c", linestyle="--", alpha=0.7,
+                label=f"SanBarth Capacity ({SANBARTH_STORAGE_CAPACITY_BBL:,} bbl)")
 ax1.axhline(DUKE_STORAGE_CAPACITY_BBL, color="#3498db", linestyle="--", alpha=0.7,
                 label=f"Duke Capacity ({DUKE_STORAGE_CAPACITY_BBL:,} bbl)")
 ax1.axhline(STARTURN_STORAGE_CAPACITY_BBL, color="#d35400", linestyle="--", alpha=0.7,
@@ -5714,7 +7866,8 @@ ax1.axhline(STARTURN_STORAGE_CAPACITY_BBL, color="#d35400", linestyle="--", alph
 # Dead-stock lines per vessel (175% of each cargo)
 ds_colors = {"Sherlock": "#e74c3c", "Laphroaig": "#2ecc71",
              "Rathbone": "#9b59b6", "SantaMonica": "#6c5ce7", "Bedford": "#f39c12",
-         "Balham": "#1abc9c", "Woodstock": "#e91e63", "Bagshot": "#00bcd4", "Watson": "#95a5a6", "Berners": "#7f8c8d"}
+         "Balham": "#1abc9c", "Woodstock": "#e91e63", "Bagshot": "#00bcd4", "Watson": "#95a5a6", "Amyla": "#7f8c8d",
+         "FatimaZarah": "#84cc16"}
 for vname, vcap in [("Sherlock", DAUGHTER_CARGO_BBL),
                      ("Laphroaig", DAUGHTER_CARGO_BBL),
                      ("Rathbone", VESSEL_CAPACITIES.get("Rathbone", DAUGHTER_CARGO_BBL)),
@@ -5724,7 +7877,8 @@ for vname, vcap in [("Sherlock", DAUGHTER_CARGO_BBL),
                      ("Woodstock", VESSEL_CAPACITIES.get("Woodstock", DAUGHTER_CARGO_BBL)),
              ("Bagshot",  VESSEL_CAPACITIES.get("Bagshot",  DAUGHTER_CARGO_BBL)),
              ("Watson",   VESSEL_CAPACITIES.get("Watson",   DAUGHTER_CARGO_BBL)),
-             ("Berners",  VESSEL_CAPACITIES.get("Berners",  DAUGHTER_CARGO_BBL))]:
+             ("Amyla",  VESSEL_CAPACITIES.get("Amyla",  DAUGHTER_CARGO_BBL)),
+             ("FatimaZarah", VESSEL_CAPACITIES.get("FatimaZarah", DAUGHTER_CARGO_BBL))]:
     ds = DEAD_STOCK_FACTOR * vcap
     ax1.axhline(ds, color=ds_colors[vname], linestyle=":",
                 alpha=0.8, linewidth=1.2,
@@ -5747,29 +7901,24 @@ ax2.plot(timeline_df["Time"], timeline_df["Mother_bbl"],
             color="#2980b9", linewidth=2, label="Point B Total Mother Volume")
 ax2.plot(timeline_df["Time"], timeline_df["Bryanston_bbl"],
             color="#16a085", linewidth=1.4, alpha=0.9, label=f"{MOTHER_PRIMARY_NAME} Volume")
-ax2.plot(timeline_df["Time"], timeline_df["Alkebulan_bbl"],
-            color="#c0392b", linewidth=1.4, alpha=0.9, label=f"{MOTHER_SECONDARY_NAME} Volume")
 ax2.plot(timeline_df["Time"], timeline_df["GreenEagle_bbl"],
-            color="#8e44ad", linewidth=1.4, alpha=0.9, label=f"{MOTHER_TERTIARY_NAME} Volume")
-ax2.plot(timeline_df["Time"], timeline_df["SanJulian_bbl"],
-            color="#000000", linewidth=2.0, alpha=1.0, label=f"{MOTHER_QUATERNARY_NAME} Volume")
+            color="#8e44ad", linewidth=1.4, alpha=0.9, label=f"{MOTHER_SECONDARY_NAME} Volume")
+ax2.plot(timeline_df["Time"], timeline_df["Alkebulan_bbl"],
+            color="#16a085", linewidth=1.4, alpha=0.9, label=f"{MOTHER_QUINARY_NAME} Volume")
 ax2.axhline(MOTHER_EXPORT_TRIGGER_BY_NAME[MOTHER_PRIMARY_NAME], color="#e74c3c", linestyle="--", alpha=0.7,
           label=(f"{MOTHER_PRIMARY_NAME} Export Trigger "
               f"({MOTHER_EXPORT_TRIGGER_BY_NAME[MOTHER_PRIMARY_NAME]:,} bbl)"))
-ax2.axhline(MOTHER_EXPORT_TRIGGER_BY_NAME[MOTHER_SECONDARY_NAME], color="#f39c12", linestyle="--", alpha=0.7,
+ax2.axhline(MOTHER_EXPORT_TRIGGER_BY_NAME[MOTHER_SECONDARY_NAME], color="#8e44ad", linestyle="--", alpha=0.7,
           label=(f"{MOTHER_SECONDARY_NAME} Export Trigger "
               f"({MOTHER_EXPORT_TRIGGER_BY_NAME[MOTHER_SECONDARY_NAME]:,} bbl)"))
-ax2.axhline(MOTHER_EXPORT_TRIGGER_BY_NAME[MOTHER_TERTIARY_NAME], color="#8e44ad", linestyle="--", alpha=0.7,
-          label=(f"{MOTHER_TERTIARY_NAME} Export Trigger "
-              f"({MOTHER_EXPORT_TRIGGER_BY_NAME[MOTHER_TERTIARY_NAME]:,} bbl)"))
 ax2.axhline(MOTHER_CAPACITY_BY_NAME[MOTHER_PRIMARY_NAME], color="#922b21", linestyle="-.", alpha=0.5,
           label=f"{MOTHER_PRIMARY_NAME} Max Capacity ({MOTHER_CAPACITY_BY_NAME[MOTHER_PRIMARY_NAME]:,} bbl)")
 ax2.axhline(MOTHER_CAPACITY_BY_NAME[MOTHER_SECONDARY_NAME], color="#7f8c8d", linestyle="-.", alpha=0.5,
-          label=(f"{MOTHER_SECONDARY_NAME}/{MOTHER_TERTIARY_NAME} Max Capacity "
+          label=(f"{MOTHER_SECONDARY_NAME} Max Capacity "
               f"({MOTHER_CAPACITY_BY_NAME[MOTHER_SECONDARY_NAME]:,} bbl)"))
 ax2.set_ylabel("Volume (bbls)", fontsize=10, color="white")
 ax2.set_title(
-    f"Point B Mothers ({MOTHER_PRIMARY_NAME} + {MOTHER_SECONDARY_NAME} + {MOTHER_TERTIARY_NAME} + {MOTHER_QUATERNARY_NAME}) — Volume Level",
+    f"Point B Mothers ({MOTHER_PRIMARY_NAME} + {MOTHER_SECONDARY_NAME} + {MOTHER_QUINARY_NAME}) — Volume Level",
     fontsize=11,
 )
 ax2.legend(loc="upper right", fontsize=8, facecolor="#0f3460", labelcolor="white")
