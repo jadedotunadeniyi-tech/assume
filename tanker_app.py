@@ -9762,7 +9762,8 @@ Generated {_dt.datetime.now().strftime('%Y-%m-%d %H:%M')} | Tanker Operations Si
                 #   Borderline (amber)  lower_limit – upper_limit
                 #   Unsafe (red)  > upper_limit
                 _STOCK_THRESHOLDS = {
-                    "SanBarth":    (189_000, 228_000),
+                    # SanBarth: 70% / 84.4% of her 400,000 bbl capacity
+                    "SanBarth":  (280_000, 337_600),
                     "JasmineS":  (189_000, 228_000),
                     "Westmore":  (130_000, 175_000),   # Unsafe >175k; Borderline 130k-175k; Safe <130k
                     "Ibom":      ( 70_000,  84_400),
@@ -10278,7 +10279,8 @@ Generated {_dt.datetime.now().strftime('%Y-%m-%d %H:%M')} | Tanker Operations Si
 
                 # Stock cells — exact same logic as main renderer (_scell)
                 _FSTOCK_THRESHOLDS = {
-                    "SanBarth":    (189_000, 228_000),
+                    # SanBarth: 70% / 84.4% of her 400,000 bbl capacity
+                    "SanBarth":  (280_000, 337_600),
                     "JasmineS":  (189_000, 228_000),
                     "Westmore":  (130_000, 175_000),   # Unsafe >175k; Borderline 130k-175k; Safe <130k
                     "Ibom":      ( 70_000,  84_400),
